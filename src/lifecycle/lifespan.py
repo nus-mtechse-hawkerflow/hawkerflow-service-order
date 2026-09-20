@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 import os
 
@@ -9,6 +11,9 @@ from configurations.app_config import AppConfig
 from session.db_session import DBSession
 from services.order_service import OrderService
 from repository.order_repo import OrderRepo
+from workers.sqs_worker import SqsWorker
+
+logger = logging.getLogger("hawkerflow-order.lifecycle")
 
 
 @asynccontextmanager
@@ -27,4 +32,37 @@ async def startup(app: FastAPI):
     app.state.session = session
     app.state.order_service = order_service
 
+    # Start background SQS worker if enabled in configuration
+    worker = None
+    worker_task = None
+    if config.sqs and config.sqs.enabled and config.sqs.queue_url:
+        logger.info(
+            "🚀 Initializing background SQS worker on queue: %s (region: %s)",
+            config.sqs.queue_url,
+            config.sqs.region_name,
+        )
+        try:
+            worker = SqsWorker(config.sqs, order_service)
+            app.state.sqs_worker = worker
+            worker_task = asyncio.create_task(worker.start())
+        except Exception as e:
+            logger.exception("❌ Failed to start SQS Worker during lifespan startup: %s", e)
+    else:
+        logger.warning(
+            "⚠️ SQS Background Worker is DISABLED (sqs.enabled=false or queue_url is empty). "
+            "Set sqs.enabled: true in resources/config.yml to enable."
+        )
+        app.state.sqs_worker = None
+
     yield
+
+    # Clean shutdown of background worker
+    if worker and worker_task:
+        logger.info("Shutting down background SQS Worker...")
+        worker.stop()
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("SQS Worker shutdown complete.")

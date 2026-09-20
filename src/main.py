@@ -1,3 +1,4 @@
+import logging
 from configurations.app_config import AppConfig
 from endpoints.order_routes import order_router
 
@@ -7,6 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from lifecycle.lifespan import startup
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("hawkerflow-order")
 
 
 class HawkerFlowOrder:

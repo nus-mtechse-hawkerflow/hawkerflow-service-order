@@ -52,9 +52,22 @@ class Datasource(BaseSettings):
     options: DatabaseOptions
 
 
+class SqsConfig(BaseSettings):
+    enabled: bool = True
+    queue_url: str = ""
+    region_name: str = ""
+    endpoint_url: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    wait_time_seconds: int = 20
+    max_number_of_messages: int = 10
+    visibility_timeout: int = 60
+
+
 class AppConfig(BaseSettings):
     service: Service
     datasource: Datasource
+    sqs: SqsConfig | None = None
 
     model_config = SettingsConfigDict(yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml")
 
@@ -67,4 +80,10 @@ class AppConfig(BaseSettings):
             dotenv_settings: PydanticBaseSettingsSource,
             file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (YamlConfigSettingsSource(settings_cls),)
+        return (
+            env_settings,
+            dotenv_settings,
+            YamlConfigSettingsSource(settings_cls),
+            init_settings,
+        )
+

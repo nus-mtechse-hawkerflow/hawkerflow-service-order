@@ -1,7 +1,7 @@
 service:
   title: HawkerFlow Service Order
   root_path: '/hawkerflow'
-  port: 8080
+  port: 8082
   host: '127.0.0.1'
   allow_origins:
     - '*'
@@ -27,3 +27,12 @@ datasource:
     port: 5432
   options:
     echo: false
+
+sqs:
+  enabled: true
+  queue_url: "https://localhost.localstack.cloud:4566/000000000000/order_queue"
+  region_name: "us-east-1"
+  endpoint_url: "https://localhost.localstack.cloud:4566"
+  wait_time_seconds: 5
+  max_number_of_messages: 10
+  visibility_timeout: 60

@@ -1,10 +1,8 @@
 from datetime import datetime, timezone
-
 from sqlmodel import SQLModel, Field, Relationship
 
 
 class Order(SQLModel, table=True):
-
     __tablename__: str = "orders"
 
     f_id: int = Field(default=None, primary_key=True)
@@ -13,3 +11,4 @@ class Order(SQLModel, table=True):
     f_status: str = Field(default="PENDING")
 
     order_items: list["OrderItem"] = Relationship(back_populates="order")
+    stall_orders: list["StallOrder"] = Relationship(back_populates="order")
