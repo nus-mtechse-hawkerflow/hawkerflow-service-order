@@ -22,3 +22,6 @@ venv/
 # Editors
 .vscode/
 .idea/
+
+
+graphify-out
