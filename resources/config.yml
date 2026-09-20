@@ -1,0 +1,29 @@
+service:
+  title: HawkerFlow Service Order
+  root_path: '/hawkerflow'
+  port: 8080
+  host: '127.0.0.1'
+  allow_origins:
+    - '*'
+  methods:
+    - '*'
+  headers:
+    - '*'
+  docs_url: '/docs'
+  redoc_url: '/redoc'
+  reload: true
+  scheme: 'http'
+  credentials: true
+
+datasource:
+  driver:
+    package: "drivers.postgres_driver"
+    driver_class: "PostgresDriver"
+  database:
+    connection_url: 'sqlite:///database.db'
+    driver_name: 'postgresql+psycopg2'
+    name: 'hawkerflow_order_db'
+    host: 'localhost'
+    port: 5432
+  options:
+    echo: false

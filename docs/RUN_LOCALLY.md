@@ -234,7 +234,7 @@ done
 This is the microservices moment of your presentation. Practise it here first.
 
 ```bash
-# 1. break ONE service
+# 1. break ONE services
 curl -X POST "localhost:8000/_local/break?service=notification"
 
 # 2. place 2-3 orders in the diner app - they still succeed

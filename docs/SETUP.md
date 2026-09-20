@@ -114,7 +114,7 @@ curl localhost:8000/v1/stalls/ahhock-cr/orders -H "authorization: local-owner"  
 ### Rehearse the fault-isolation demo locally
 
 ```bash
-curl -X POST "localhost:8000/_local/break?service=notification"     # break one service
+curl -X POST "localhost:8000/_local/break?service=notification"     # break one services
 # place a few orders in the diner app - they still succeed (HTTP 201)
 curl localhost:8000/_local/status                                    # DLQ depth rises, analytics unaffected
 curl -X POST "localhost:8000/_local/repair?service=notification"
@@ -414,6 +414,6 @@ make deploy-prod            # manual prod deploy (pipeline is preferred)
 
 # evidence for the report
 make loadtest               # k6 whole platform (needs -e vars, see Part 7)
-make scale-demo             # drive ONE service - independent scalability graph
-make fault-demo             # break one service - fault isolation + DLQ + recovery
+make scale-demo             # drive ONE services - independent scalability graph
+make fault-demo             # break one services - fault isolation + DLQ + recovery
 ```

@@ -105,7 +105,7 @@ Resources:
       Name: !Sub /hawkerflow/${Stage}/order-ttl-days
       Type: String
       Value: '90'
-      Description: Online retention of order records in days (read by the ordering service)
+      Description: Online retention of order records in days (read by the ordering services)
 
   # ---------------- Events ----------------
   NotificationsDLQ:
@@ -533,7 +533,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub hawkerflow-${Stage}-ordering-errors
-      AlarmDescription: Unhandled errors in the ordering service
+      AlarmDescription: Unhandled errors in the ordering services
       Namespace: AWS/Lambda
       MetricName: Errors
       Dimensions:

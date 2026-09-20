@@ -1,10 +1,10 @@
-// k6 load model for the scalability demonstration (report sections 4.1 and 6).
+// k6 load models for the scalability demonstration (report sections 4.1 and 6).
 //
 // Whole platform, stepped:
 //   for R in 25 50 100; do k6 run loadtest/order_flow.js -e RATE=$R \
 //     -e API_URL=... -e ID_TOKEN=... ; done
 //
-// Single service, to demonstrate INDEPENDENT scalability (microservices evidence):
+// Single services, to demonstrate INDEPENDENT scalability (microservices evidence):
 //   k6 run loadtest/order_flow.js -e SERVICE=catalog  -e RATE=100 ...
 //   k6 run loadtest/order_flow.js -e SERVICE=ordering -e RATE=40  ...
 //
