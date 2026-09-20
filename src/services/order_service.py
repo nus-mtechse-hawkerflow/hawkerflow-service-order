@@ -1,14 +1,19 @@
+import asyncio
 import logging
+
 from models.order_details import OrderDetails
 from models.order_update import OrderUpdate
 from repository.order_repo import OrderRepo
+from services.event_publisher import EventPublisher
 
-logger = logging.getLogger(__name__)
+
+logger = logging.getLogger("hawkerflow-order.order_service")
 
 
 class OrderService:
-    def __init__(self, repo: OrderRepo):
+    def __init__(self, repo: OrderRepo, event_publisher: EventPublisher | None = None):
         self._repo = repo
+        self._publisher = event_publisher
 
     def submit_order(self, order: OrderDetails):
         return self._repo.create_order(order)
@@ -23,11 +28,25 @@ class OrderService:
         """Fetch orders belonging strictly to the specified stall."""
         return self._repo.get_orders_for_stall(stall_id, status)
 
-    def update_stall_order_status(self, stall_id: int, order_id: int, status: str) -> dict | None:
-        """Update preparation status of an order for a specific stall."""
-        return self._repo.update_stall_order_status(stall_id, order_id, status)
+    async def update_stall_order_status(self, stall_id: int, order_id: int, status: str) -> dict | None:
+        """
+        Update the preparation status of an order for a specific stall.
+        Automatically publishes the corresponding domain event (e.g. OrderAccepted, OrderReady).
+        """
+        result = self._repo.update_stall_order_status(stall_id, order_id, status)
 
-    def process_incoming_sqs_message(self, payload: dict):
+        if result and self._publisher:
+            try:
+                if status.upper() == "READY":
+                    await self._publisher.publish_order_ready(result)
+                else:
+                    await self._publisher.publish_order_status_updated(result)
+            except Exception as e:
+                logger.error("Failed to publish Order %s event: %s", status, e)
+
+        return result
+
+    async def process_incoming_sqs_message(self, payload: dict):
         """
         Process an order message received from SQS.
         Supports both wrapped event format ({"event_type": "...", "data": {...}})
@@ -37,7 +56,7 @@ class OrderService:
         event_type = payload.get("event_type", "ORDER_PLACED")
 
         match event_type:
-            case "ORDER_PLACE":
+            case "ORDER_PLACE" | "ORDER_PLACED":
                 order_data = payload.get("data", payload)
                 order_details = OrderDetails(**order_data)
                 result = self.submit_order(order_details)
@@ -52,7 +71,7 @@ class OrderService:
                 status = update_data.get("status")
 
                 if stall_id is not None and order_id is not None and status:
-                    return self.update_stall_order_status(int(stall_id), int(order_id), status)
+                    return await self.update_stall_order_status(int(stall_id), int(order_id), status)
 
                 elif order_id is not None and status:
                     return self.update_order(OrderUpdate(order_id=int(order_id), status=status))

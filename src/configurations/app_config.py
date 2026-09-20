@@ -64,10 +64,21 @@ class SqsConfig(BaseSettings):
     visibility_timeout: int = 60
 
 
+class EventsConfig(BaseSettings):
+    enabled: bool = True
+    topic_arn: str | None = None
+    notification_queue_url: str = "https://localhost.localstack.cloud:4566/000000000000/notifications_queue"
+    region_name: str = "us-east-1"
+    endpoint_url: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+
+
 class AppConfig(BaseSettings):
     service: Service
     datasource: Datasource
     sqs: SqsConfig | None = None
+    events: EventsConfig = Field(default_factory=EventsConfig)
 
     model_config = SettingsConfigDict(yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml")
 

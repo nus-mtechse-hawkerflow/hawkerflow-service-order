@@ -126,7 +126,7 @@ async def update_stall_order_status(
     for items belonging ONLY to their stall in the specified order.
     """
     verify_stall_access(requested_stall_id=stall_id, authenticated_stall_id=current_stall_id)
-    result = order_service.update_stall_order_status(stall_id, order_id, body.status)
+    result = await order_service.update_stall_order_status(stall_id, order_id, body.status)
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

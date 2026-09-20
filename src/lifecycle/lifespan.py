@@ -11,6 +11,7 @@ from configurations.app_config import AppConfig
 from session.db_session import DBSession
 from services.order_service import OrderService
 from repository.order_repo import OrderRepo
+from services.event_publisher import EventPublisher
 from workers.sqs_worker import SqsWorker
 
 logger = logging.getLogger("hawkerflow-order.lifecycle")
@@ -26,10 +27,12 @@ async def startup(app: FastAPI):
     SQLModel.metadata.create_all(session.engine)
 
     order_repo = OrderRepo(session.engine)
-    order_service = OrderService(order_repo)
+    event_publisher = EventPublisher(config.events) if config.events else None
+    order_service = OrderService(order_repo, event_publisher=event_publisher)
 
     app.state.config = config
     app.state.session = session
+    app.state.event_publisher = event_publisher
     app.state.order_service = order_service
 
     # Start background SQS worker if enabled in configuration
