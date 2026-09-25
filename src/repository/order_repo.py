@@ -31,6 +31,7 @@ class OrderRepo:
                 order_item = OrderItem(
                     f_stall_id=o.stall_id,
                     f_dish_id=d.dish_id,
+                    f_dish_name=d.dish_name,
                     f_quantity=d.quantity,
                     f_price=d.price,
                     stall_order=stall_order
@@ -79,7 +80,7 @@ class OrderRepo:
         """Fetch orders belonging exclusively to the specified stall."""
         statement = select(StallOrder).where(StallOrder.f_stall_id == stall_id)
         if status:
-            statement = statement.where(StallOrder.f_status == status)
+            statement = statement.where(StallOrder.f_status == status.upper())
 
         with Session(self._engine) as session:
             stall_orders = session.exec(statement).all()

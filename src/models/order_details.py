@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class Dish(BaseModel):
     dish_id: int
+    dish_name: str
     quantity: int
     price: float
 
