@@ -1,18 +1,16 @@
 import asyncio
 import unittest
+
 from fastapi import HTTPException
 from sqlmodel import SQLModel, create_engine
 
 from dependencies.auth import get_current_stall_id, verify_stall_access
 from endpoints.order_routes import (
-    get_my_stall_orders,
-    get_order,
     get_stall_orders,
-    submit_order,
     update_stall_order_status,
 )
-from entities import Order, OrderItem, StallOrder
-from models.order_details import Dish, Order as OrderDto, OrderDetails
+from models.order_details import Dish, OrderDetails
+from models.order_details import Order as OrderDto
 from models.stall_order_update import StallOrderUpdate
 from repository.order_repo import OrderRepo
 from services.order_service import OrderService
@@ -38,13 +36,15 @@ class TestOrderIsolation(unittest.TestCase):
                     stall_id=101,
                     dishes=[
                         Dish(dish_id=1, dish_name="Dish 1", quantity=2, price=5.50),  # $11.00
-                        Dish(dish_id=2, dish_name="Dish 2", quantity=1, price=4.00),  # $4.00 -> total 101 = $15.00
+                        # $4.00 -> total 101 = $15.00
+                        Dish(dish_id=2, dish_name="Dish 2", quantity=1, price=4.00),
                     ],
                 ),
                 OrderDto(
                     stall_id=202,
                     dishes=[
-                        Dish(dish_id=3, dish_name="Dish 3", quantity=1, price=8.00),  # $8.00 -> total 202 = $8.00
+                        # $8.00 -> total 202 = $8.00
+                        Dish(dish_id=3, dish_name="Dish 3", quantity=1, price=8.00),
                     ],
                 ),
             ],
@@ -93,7 +93,9 @@ class TestOrderIsolation(unittest.TestCase):
         order_id = placed["order_id"]
 
         # Stall 101 updates their status
-        res = asyncio.run(self.service.update_stall_order_status(stall_id=101, order_id=order_id, status="PREPARING"))
+        res = asyncio.run(
+            self.service.update_stall_order_status(stall_id=101, order_id=order_id, status="PREPARING")
+        )
         self.assertEqual(res["status"], "PREPARING")
 
         # Verify Stall 202's status is still PENDING
@@ -105,8 +107,10 @@ class TestOrderIsolation(unittest.TestCase):
         self.assertEqual(overall_order["order_status"], "IN_PROGRESS")
 
         # Now Stall 202 completes, and Stall 101 completes
-        asyncio.run(self.service.update_stall_order_status(stall_id=101, order_id=order_id, status="COMPLETED"))
-        asyncio.run(self.service.update_stall_order_status(stall_id=202, order_id=order_id, status="COMPLETED"))
+        for stall_id in (101, 202):
+            asyncio.run(self.service.update_stall_order_status(
+                stall_id=stall_id, order_id=order_id, status="COMPLETED"
+            ))
 
         # Parent order should now be COMPLETED
         overall_order = self.service.get_order(order_id)

@@ -1,12 +1,12 @@
 import logging
-from configurations.app_config import AppConfig
-from endpoints.order_routes import order_router
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from configurations.app_config import AppConfig
+from endpoints.order_routes import order_router
 from lifecycle.lifespan import startup
 
 logging.basicConfig(

@@ -3,11 +3,12 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from sqlmodel import SQLModel, create_engine
 from sqlalchemy.pool import StaticPool
+from sqlmodel import SQLModel, create_engine
 
 from configurations.app_config import EventsConfig
-from models.order_details import Dish, Order as OrderDto, OrderDetails
+from models.order_details import Dish, OrderDetails
+from models.order_details import Order as OrderDto
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
 from services.order_service import OrderService

@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main]
+    branches: [main, release]
 
 permissions:
   contents: read
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: pytest -q
 
   pip-audit:
@@ -55,7 +55,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - run: bandit -r services scripts
+      - run: bandit -r src
 
   gitleaks:
     name: gitleaks

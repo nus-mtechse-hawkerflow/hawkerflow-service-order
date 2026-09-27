@@ -1,8 +1,8 @@
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -130,7 +130,9 @@ class SqsWorker:
             except EndpointConnectionError as e:
                 err_msg = f"Could not connect to SQS endpoint at {self.config.queue_url}: {e}"
                 self.last_error = err_msg
-                logger.warning("⚠️ SQS Connection Error: %s. Is LocalStack/AWS running? Retrying in 5s...", err_msg)
+                logger.warning(
+                    "⚠️ SQS Connection Error: %s. Is LocalStack/AWS running? Retrying in 5s...", err_msg
+                )
                 try:
                     await asyncio.sleep(5)
                 except asyncio.CancelledError:

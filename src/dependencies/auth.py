@@ -42,7 +42,7 @@ async def get_current_stall_id(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid X-Stall-ID header: must be an integer",
-            )
+            ) from None
 
     # 2. Bearer token / JWT
     if authorization and authorization.startswith("Bearer "):
@@ -69,5 +69,7 @@ def verify_stall_access(requested_stall_id: int, authenticated_stall_id: int) ->
     if requested_stall_id != authenticated_stall_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Forbidden: You are not authorized to view or manage orders for stall {requested_stall_id}",
+            detail=(
+                f"Forbidden: You are not authorized to view or manage orders for stall {requested_stall_id}"
+            ),
         )

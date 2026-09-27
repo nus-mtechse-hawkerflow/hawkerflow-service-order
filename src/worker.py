@@ -1,9 +1,9 @@
 import asyncio
 import logging
 import os
-from pathlib import Path
 import signal
 import sys
+from pathlib import Path
 
 from sqlmodel import SQLModel
 

@@ -1,12 +1,12 @@
 import os
 from pathlib import Path
 
-from pydantic import SecretStr, Field
+from pydantic import Field, SecretStr
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    YamlConfigSettingsSource
+    YamlConfigSettingsSource,
 )
 
 
@@ -80,7 +80,9 @@ class AppConfig(BaseSettings):
     sqs: SqsConfig | None = None
     events: EventsConfig = Field(default_factory=EventsConfig)
 
-    model_config = SettingsConfigDict(yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml")
+    model_config = SettingsConfigDict(
+        yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml"
+    )
 
     @classmethod
     def settings_customise_sources(

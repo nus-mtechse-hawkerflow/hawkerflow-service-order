@@ -1,0 +1,16 @@
+# Picked up automatically by `gitleaks detect --source .` (CI job "gitleaks").
+title = "hawkerflow-service-order"
+
+[extend]
+useDefault = true
+
+# Commit 13124c3 (2026-09-05) committed a whole Python virtualenv (1,568 files under
+# .venv/), removed again in 7b7ff7b. CI scans full history, and third-party library
+# code in it (test fixtures, sample connection strings) trips the generic rules.
+# None of it is this project's credentials. Findings anywhere else still fail CI.
+[[allowlists]]
+description = "Third-party packages from the virtualenv committed in 13124c3"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)site-packages/''',
+]

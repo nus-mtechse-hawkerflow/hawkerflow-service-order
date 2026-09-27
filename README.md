@@ -155,8 +155,5 @@ Fine for local development; to fix before any public deployment:
 - **CORS** allows every origin (`allow_origins: '*'`).
 - **Infrastructure.** `infra/template.yaml` still describes the original Lambda + DynamoDB design;
   nothing yet defines this service, its database or its queues for AWS.
-- **CI** (`.github/workflows/ci.yml`) is out of date: the test job installs only
-  `requirements-dev.txt` (no FastAPI or SQLModel), `bandit` scans `services` and `scripts`, which
-  don't exist, and `ruff check .` reports errors already on `release`.
 - `POST /v1/order/sqs/simulate` calls an async handler without `await`, so it returns before
   processing the message.
