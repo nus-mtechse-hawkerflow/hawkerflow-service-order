@@ -120,6 +120,7 @@ hawkerflow-service-order/
 1. **`Order`** (`orders` table): Represents the customer's entire checkout transaction across all stalls. Tracks total price, global created timestamp, and high-level status (`PENDING`, `IN_PROGRESS`, `READY`, `COMPLETED`).
 2. **`StallOrder`** (`stall_orders` table): Partitioned sub-order belonging strictly to one `f_stall_id`. Contains that stall's independent preparation lifecycle (`PENDING` -> `PREPARING` -> `READY` -> `COMPLETED`) and subtotal.
 3. **`OrderItem`** (`order_items` table): Stores individual dishes with quantities and unit prices, linked to both the parent `Order` and the specific `StallOrder`.
+4. **`OrderOption`** (`order_options` table): the order's `dining_option` (`dine_in` or `takeaway`, both self-collect) and `takeaway_fee`. Optional on `OrderDetails`; orders without a row are dine-in. Returned by `GET /orders/{order_id}` and in each stall order of the stall feeds.
 
 ### Multi-Tenant Query Scoping:
 - **Never query without `f_stall_id` for hawker operations**:
