@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 
 from entities.order import Order
 from entities.order_item import OrderItem
+from entities.order_option import OrderOption
 from entities.order_request import OrderRequest
 from entities.stall_order import StallOrder
 from models.order_details import OrderDetails
@@ -51,10 +52,15 @@ class OrderRepo:
 
         with Session(self._engine) as session:
             session.add(order)
+            # Same transaction as the order, so these never point at a
+            # half-written order.
+            session.flush()
+            session.add(OrderOption(
+                f_order_id=order.f_id,
+                f_dining_option=order_details.dining_option,
+                f_takeaway_fee=order_details.takeaway_fee,
+            ))
             if order_ref:
-                # Same transaction as the order, so a ref never points at a
-                # half-written order.
-                session.flush()
                 session.add(OrderRequest(f_order_ref=order_ref, f_order_id=order.f_id))
             session.commit()
             session.refresh(order)
@@ -102,6 +108,9 @@ class OrderRepo:
                 order_details["total_order_price"] = order.f_total_price
                 order_details["order_status"] = order.f_status
                 order_details["order_created_at"] = order.f_created_at.strftime("%Y-%m-%d %H:%M:%S")
+                option = session.get(OrderOption, order.f_id)
+                order_details["dining_option"] = option.f_dining_option if option else "dine_in"
+                order_details["takeaway_fee"] = option.f_takeaway_fee if option else 0.0
 
             return order_details
 
@@ -124,6 +133,11 @@ class OrderRepo:
 
         with Session(self._engine) as session:
             stall_orders = session.exec(statement).all()
+            order_ids = {so.f_order_id for so in stall_orders}
+            options = {
+                o.f_order_id: o.f_dining_option
+                for o in session.exec(select(OrderOption).where(OrderOption.f_order_id.in_(order_ids)))
+            } if order_ids else {}
             results = []
             for so in stall_orders:
                 results.append({
@@ -132,6 +146,7 @@ class OrderRepo:
                     "stall_id": so.f_stall_id,
                     "status": so.f_status,
                     "subtotal": so.f_subtotal,
+                    "dining_option": options.get(so.f_order_id, "dine_in"),
                     "created_at": so.order.f_created_at.strftime("%Y-%m-%d %H:%M:%S") if so.order else None,
                     "items": [
                         {
