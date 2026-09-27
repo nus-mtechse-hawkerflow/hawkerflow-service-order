@@ -37,14 +37,14 @@ class TestOrderIsolation(unittest.TestCase):
                 OrderDto(
                     stall_id=101,
                     dishes=[
-                        Dish(dish_id=1, quantity=2, price=5.50),  # $11.00
-                        Dish(dish_id=2, quantity=1, price=4.00),  # $4.00 -> total 101 = $15.00
+                        Dish(dish_id=1, dish_name="Dish 1", quantity=2, price=5.50),  # $11.00
+                        Dish(dish_id=2, dish_name="Dish 2", quantity=1, price=4.00),  # $4.00 -> total 101 = $15.00
                     ],
                 ),
                 OrderDto(
                     stall_id=202,
                     dishes=[
-                        Dish(dish_id=3, quantity=1, price=8.00),  # $8.00 -> total 202 = $8.00
+                        Dish(dish_id=3, dish_name="Dish 3", quantity=1, price=8.00),  # $8.00 -> total 202 = $8.00
                     ],
                 ),
             ],
@@ -84,8 +84,8 @@ class TestOrderIsolation(unittest.TestCase):
         """
         payload = OrderDetails(
             orders=[
-                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, quantity=1, price=5.0)]),
-                OrderDto(stall_id=202, dishes=[Dish(dish_id=2, quantity=1, price=6.0)]),
+                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, dish_name="Dish 1", quantity=1, price=5.0)]),
+                OrderDto(stall_id=202, dishes=[Dish(dish_id=2, dish_name="Dish 2", quantity=1, price=6.0)]),
             ],
             total_price=11.0,
         )
@@ -142,7 +142,7 @@ class TestOrderIsolation(unittest.TestCase):
         """
         payload = OrderDetails(
             orders=[
-                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, quantity=1, price=7.5)]),
+                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, dish_name="Dish 1", quantity=1, price=7.5)]),
             ],
             total_price=7.5,
         )

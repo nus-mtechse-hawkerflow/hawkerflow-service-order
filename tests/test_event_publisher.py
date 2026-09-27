@@ -105,7 +105,7 @@ class TestEventPublisher(unittest.TestCase):
         # Create an order
         order_payload = OrderDetails(
             orders=[
-                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, quantity=1, price=5.0)]),
+                OrderDto(stall_id=101, dishes=[Dish(dish_id=1, dish_name="Dish 1", quantity=1, price=5.0)]),
             ],
             total_price=5.0,
         )
