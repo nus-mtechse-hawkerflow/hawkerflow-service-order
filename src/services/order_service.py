@@ -18,6 +18,24 @@ class OrderService:
     def submit_order(self, order: OrderDetails, order_ref: str | None = None):
         return self._repo.create_order(order, order_ref=order_ref)
 
+    async def place_order(self, order: OrderDetails, order_ref: str | None = None):
+        """
+        Create an order and publish OrderPlaced for each stall sub-order. A
+        queued order whose order_ref was seen before is a redelivery: its order
+        exists and was announced already, so nothing is published again.
+        """
+        is_redelivery = order_ref is not None and self._repo.get_order_id_by_ref(order_ref) is not None
+        placed = self.submit_order(order, order_ref=order_ref)
+
+        if self._publisher and not is_redelivery:
+            for stall_order in self._repo.get_stall_orders(placed["order_id"]):
+                try:
+                    await self._publisher.publish_order_placed(stall_order)
+                except Exception as e:
+                    logger.error("Failed to publish OrderPlaced event: %s", e)
+
+        return placed
+
     def get_order(self, order_id: int):
         return self._repo.get_order(order_id)
 
@@ -66,7 +84,7 @@ class OrderService:
             case "ORDER_PLACE" | "ORDER_PLACED":
                 order_data = payload.get("data", payload)
                 order_details = OrderDetails(**order_data)
-                result = self.submit_order(order_details, order_ref=payload.get("order_ref"))
+                result = await self.place_order(order_details, order_ref=payload.get("order_ref"))
 
                 logger.info("Successfully created order via SQS: %s", result.get("order_id"))
                 return result
@@ -89,4 +107,4 @@ class OrderService:
             case _:
                 # Fallback: parse as direct OrderDetails
                 order_details = OrderDetails(**payload)
-                return self.submit_order(order_details)
+                return await self.place_order(order_details)

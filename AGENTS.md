@@ -169,6 +169,7 @@ Tenant isolation is enforced in [`src/dependencies/auth.py`](file:///Users/wenji
 
 ### B. Outbound Publisher (`EventPublisher`)
 - Located in [`src/services/event_publisher.py`](file:///Users/wenjiefang/Documents/Development/hawkerflow-service-order/src/services/event_publisher.py).
+- When an order is created (`POST /v1/order/orders` or the SQS worker), `OrderService.place_order` publishes one `OrderPlaced` event per stall sub-order (`status: PENDING`). A redelivered queue message does not publish it again.
 - When a stall updates preparation status to `READY`:
   ```bash
   PATCH /v1/order/stalls/{stall_id}/orders/{order_id} {"status": "READY"}
