@@ -60,6 +60,21 @@ class OrderRepo:
             session.refresh(order)
             return self._order_summary(order)
 
+    def get_stall_orders(self, order_id: int) -> list[dict]:
+        """An order's stall sub-orders, shaped like update_stall_order_status's result."""
+        statement = select(StallOrder).where(StallOrder.f_order_id == order_id)
+        with Session(self._engine) as session:
+            return [
+                {
+                    "stall_order_id": so.f_id,
+                    "order_id": so.f_order_id,
+                    "stall_id": so.f_stall_id,
+                    "status": so.f_status,
+                    "subtotal": so.f_subtotal
+                }
+                for so in session.exec(statement).all()
+            ]
+
     def get_order_id_by_ref(self, order_ref: str) -> int | None:
         with Session(self._engine) as session:
             request = session.get(OrderRequest, order_ref)

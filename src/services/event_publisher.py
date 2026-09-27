@@ -143,6 +143,22 @@ class EventPublisher:
             message_attributes=attrs,
         )
 
+    async def publish_order_placed(self, stall_order: dict) -> dict | None:
+        """Publishes an OrderPlaced event for a stall's new sub-order."""
+        return await self.publish_event(
+            event_type="OrderPlaced",
+            data=stall_order,
+            message_attributes=self._stall_order_attributes(stall_order),
+        )
+
+    @staticmethod
+    def _stall_order_attributes(stall_order: dict) -> dict:
+        return {
+            key: str(stall_order[key])
+            for key in ("stall_id", "order_id", "status")
+            if key in stall_order
+        }
+
     async def publish_order_status_updated(self, stall_order: dict) -> dict | None:
         """Publishes an order status update event (e.g. OrderAccepted, OrderPreparing, etc.)"""
         status = str(stall_order.get("status", "UPDATED")).upper()

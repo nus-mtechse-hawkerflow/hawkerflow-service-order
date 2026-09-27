@@ -27,7 +27,7 @@ async def submit_order(
     orders: OrderDetails,
     order_service: Annotated[OrderService, Depends(get_order_service)],
 ):
-    order_placed = order_service.submit_order(orders)
+    order_placed = await order_service.place_order(orders)
     return JSONResponse(
         content={
             "message": "Order submitted",
