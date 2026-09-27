@@ -1,14 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [
-  "services/shared/python",
-  "services/merchant/src",
-  "services/catalog/src",
-  "services/ordering/src",
-  "services/dispatcher/src",
-  "services/notification/src",
-  "services/analytics/src",
-]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 110

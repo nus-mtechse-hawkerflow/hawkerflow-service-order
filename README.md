@@ -1,135 +1,162 @@
-# HawkerFlow
+# hawkerflow-service-order
 
-Hawker centre food ordering **platform** — the working system behind the SWE5001 practice-module
-report. Serverless, pay-per-request, all Python 3.12: idle cost is **$0**, and the lunch-hour spike
-is absorbed by Lambda/DynamoDB autoscaling.
+The HawkerFlow **order service**: takes diner and counter orders, splits each order into one
+sub-order per stall, tracks each stall's preparation status, and publishes an event every time an
+order is placed or its status changes.
 
-**Seed:** one hawker centre's order-ahead app · **Producers:** stall owners (portal) · **Consumers:** diners (web app)
+FastAPI + SQLModel on PostgreSQL, with Amazon SQS and SNS for messaging (LocalStack when run
+locally). The other HawkerFlow services (hawker, customer, analytics) and the two web apps
+(`hawker-ui`, `diner-ui`) live in their own repositories.
 
-## Architecture (one paragraph)
+> The previous README described the original single-repository serverless design (Lambda +
+> DynamoDB). It is kept, unchanged, in [docs/ORIGINAL_PLATFORM_DESIGN.md](docs/ORIGINAL_PLATFORM_DESIGN.md).
 
-Static web apps on **S3 + CloudFront** → **Cognito** issues JWTs → **API Gateway (HTTP API)**
-validates them and routes to per-service **Lambda** functions → **DynamoDB** single table
-(on-demand) is the store → **DynamoDB Streams** feed a dispatcher that publishes domain events to
-**SQS** queues (with DLQs) consumed by the notification and analytics functions. Everything is
-defined in **AWS SAM** and deployed by **GitHub Actions** via OIDC. Full rationale and trade-offs:
-see the project report (AD-01 … AD-10).
+## How orders flow
 
-## Repository layout
+```
+diner-ui ──POST /orders/queue──▶ order_queue (SQS) ──▶ SQS worker ──┐
+                                                                    ├─▶ PostgreSQL ──▶ hawker-ui (polls)
+hawker-ui (counter) ──POST /orders──────────────────────────────────┘        │
+                                                                              ▼
+hawker-ui ──PATCH status──▶ order service ──▶ order_status (SNS) ──▶ notifications_queue (SQS)
+```
 
-| Path | What lives here |
+- **Queued intake (diner app).** `POST /v1/order/orders/queue` puts an `ORDER_PLACED` message on
+  `order_queue` and answers **202** with an `order_ref`. The background worker creates the order.
+  The diner polls `GET /v1/order/orders/queue/{order_ref}`: **202 PENDING** until the order exists,
+  then **200** with its `order_id`. SQS delivers at least once, so a redelivered message with a
+  known `order_ref` returns the existing order instead of creating a second one.
+- **Direct intake (hawker counter).** `POST /v1/order/orders` creates the order immediately.
+- **Status changes.** Hawkers move each stall sub-order through
+  `PENDING → PREPARING → READY → COMPLETED` (or `CANCELLED`); the parent order's status follows.
+
+## Events
+
+Published to the `order_status` SNS topic, which delivers to `notifications_queue`. One event per
+stall sub-order:
+
+| Event | When |
 |---|---|
-| `infra/template.yaml` | The entire stack (table, queues, Cognito, API, 6 functions, CloudFront) |
-| `services/<name>/src/` | One Lambda service each: `handler.py` (transport) / `domain.py` (pure logic) / `repo.py` (data access) |
-| `services/shared/` | Lambda layer with the small shared HTTP helper library |
-| `apps/diner`, `apps/stall` | Single-file web apps (static, no build step) |
-| `apps/demo` | Local-only demo launcher + live dashboard (see below) — not part of the deploy pipeline |
-| `tests/` | pytest: pure domain tests + repository tests against moto-mocked DynamoDB |
-| `.github/workflows/` | `ci.yml` (ruff, tests, pip-audit, bandit, gitleaks, sam-validate) — `deploy.yml` (dev → approval → prod) is a planned follow-up |
-| `loadtest/order_flow.js` | k6 model: 70 RPS browse + 30 RPS orders for 10 min |
-| `scripts/` | `seed_data.py` (demo users, stalls, menus), `smoke.py` (post-deploy check) |
-| `docs/openapi.yaml` | The platform API contract |
-| `docs/RUN_LOCALLY.md` | Step-by-step local run with checkpoints |
-| `docs/LOCAL_DEV_NOTES.md` | Engineering reference for `local_server.py` and the `/demo/` launcher/dashboard internals |
-| `docs/SETUP.md` | AWS account → deploy → CI/CD → load-test evidence → teardown |
-| `docs/QA_PREP.md` | Presentation Q&A prep, glossary, ownership map |
-| `infra/SECURITY_BASELINE.md` | Every accepted IaC security finding, with justification |
+| `OrderPlaced` | an order is created (either intake path) |
+| `OrderPreparing`, `OrderReady`, `OrderCompleted`, `OrderCancelled` | a stall changes its sub-order's status |
 
-## Quickstart (from zero to running system)
-
-> **Full walkthrough — start here if any step below is unfamiliar:** [docs/SETUP.md](docs/SETUP.md)
-> covers AWS account creation, the OIDC pipeline, load-test evidence capture and troubleshooting.
-
-Prerequisites: an AWS account (new accounts get **US$100–200 credits**), AWS CLI configured,
-[SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html),
-Python 3.12.
-
-### Run it locally first (no AWS account, no Docker)
-
-```bash
-make install
-make local        # http://localhost:8000/demo/  <- start here
+```json
+{
+  "event_type": "OrderReady",
+  "event_id": "…uuid…",
+  "timestamp": "2026-09-27T09:37:56.381+00:00",
+  "data": { "stall_order_id": 131, "order_id": 110, "stall_id": 1, "status": "READY", "subtotal": 9.5 }
+}
 ```
 
-The demo launcher (`/demo/`) gives one-click, no-login access to 4 diner personas and the
-stall owner, plus a live dashboard (request counts, orders-by-stall, a "simulate incoming
-orders" button). Or go straight to `/diner/` and `/stall/` for the normal sign-in flow.
+- **Nothing consumes `notifications_queue` yet.** The diner app learns about status changes by
+  polling `GET /v1/order/orders/{order_id}` every 10 seconds. The queue is where a future
+  notification consumer (web push, SMS) would read from.
+- **Order events by `timestamp`, not arrival.** A standard SQS queue does not guarantee order.
 
-> **Full walkthrough:** [docs/RUN_LOCALLY.md](docs/RUN_LOCALLY.md) — step-by-step with
-> checkpoints, the demo script, and troubleshooting.
+## API
 
-The whole backend runs in one process against an in-memory DynamoDB (moto): real handler,
-domain and repository code, real dispatcher and consumers driven synchronously in place of
-Streams + SQS, and a stub authorizer standing in for Cognito. State resets on restart.
-Auth for direct API calls: `authorization: local-diner` or `authorization: local-owner`.
-Fault-injection endpoints (`/_local/break`, `/_local/status`, `/_local/repair`, `/_local/redrive`)
-let you rehearse the fault-isolation demo before running it on AWS.
+All paths are served under `service.root_path` (`/hawkerflow`), e.g.
+`http://localhost:8082/hawkerflow/v1/order/orders`. Interactive docs: `/hawkerflow/docs`.
 
-### Deploy to AWS
+| Method | Path | Used by | Purpose |
+|---|---|---|---|
+| `POST` | `/v1/order/orders/queue` | diner-ui | Queue an order; **202** with `order_ref` (**503** if SQS is disabled) |
+| `GET` | `/v1/order/orders/queue/{order_ref}` | diner-ui | **202 PENDING**, then **200** with `order_id` |
+| `POST` | `/v1/order/orders` | hawker-ui counter | Create an order immediately |
+| `GET` | `/v1/order/orders/{order_id}` | diner-ui tracker | Order with items, status, `dining_option`, `takeaway_fee` |
+| `PUT` | `/v1/order/orders/update` | hawker-ui | Set the parent order's status |
+| `GET` | `/v1/order/stalls/me/orders` | hawker-ui | The signed-in stall's orders (`?status=pending` to filter) |
+| `GET` | `/v1/order/stalls/{stall_id}/orders` | hawker-ui | Same, for a given stall (must match the caller's stall) |
+| `PATCH` | `/v1/order/stalls/{stall_id}/orders/{order_id}` | hawker-ui | Change a stall's sub-order status; publishes the event |
+| `GET` | `/v1/order/sqs/status` | diagnostics | SQS worker health and message count |
 
-```bash
-# 0. Guardrail FIRST - S$5 budget alarm (email-alert version: docs/SETUP.md Part 1)
-aws budgets create-budget --account-id <ACCOUNT_ID> --budget \
-  '{"BudgetName":"hawkerflow","BudgetLimit":{"Amount":"5","Unit":"USD"},"TimeUnit":"MONTHLY","BudgetType":"COST"}'
+**Order body** (both intake paths):
 
-# 1. Install dev tooling, run the checks the pipeline runs
-make install && make lint && make test
-
-# 2. Deploy the dev stack (~3 min)
-make deploy-dev
-
-# 3. Seed demo users + two stalls with menus
-make seed        # prints ApiUrl / ClientId and the demo logins
-
-# 4. Wire the apps: paste ApiUrl + ClientId into the CONFIG block of
-#    apps/diner/index.html and apps/stall/index.html, then either
-#    open them locally...
-python -m http.server 8000 --directory apps
-#    ...or publish them behind CloudFront:
-aws s3 sync apps/ s3://<WebBucketName from outputs>/
-
-# 5. Verify
-make smoke
+```json
+{
+  "orders": [{ "stall_id": 1, "dishes": [{ "dish_id": 1, "dish_name": "Steamed Chicken Rice", "quantity": 1, "price": 4.5 }] }],
+  "total_price": 4.8,
+  "dining_option": "takeaway",
+  "takeaway_fee": 0.3
+}
 ```
 
-Demo logins (created by the seed script): `diner@hawkerflow.demo` and `owner@hawkerflow.demo`,
-password `HawkerDemo1!`.
+`dining_option` (`dine_in` | `takeaway`, both self-collect) and `takeaway_fee` are optional and
+default to dine-in with no fee.
 
-## CI/CD setup (once per repo)
+## Data model
 
-1. Create an IAM role for GitHub OIDC (trust `token.actions.githubusercontent.com`, condition on
-   your `org/repo`) with permissions to deploy the stack. No access keys are ever stored.
-2. In GitHub: add repo **variable** `AWS_DEPLOY_ROLE_ARN`, and create environments `dev` and
-   `production` — add a **required reviewer** on `production` (this is the manual approval gate).
-3. Push to `main`: CI runs lint/tests/scans → deploy to dev → smoke + **integration test**
-   (full order lifecycle; requires the one-time `make seed` on dev) + **OWASP ZAP baseline** →
-   wait for approval → deploy to prod → smoke test → **alarm-gated bake window**.
+| Table | Holds |
+|---|---|
+| `orders` | One row per checkout: total, status, created time |
+| `stall_orders` | One row per stall in the order: that stall's status and subtotal |
+| `order_items` | The dishes, linked to the order and its stall sub-order |
+| `order_requests` | `order_ref` → `order_id` for queued orders (also detects redelivered messages) |
+| `order_options` | `dining_option` and `takeaway_fee` per order |
 
-## Load test (the scalability demonstration)
+Tables are created by `SQLModel.metadata.create_all` at startup; there are no migrations. That is
+why new data goes into new tables: `create_all` adds a table to an existing database but never
+adds a column to an existing table.
+
+## Configuration
+
+Settings are read from `<PROJECT_ROOT>/resources/config.yml`, and secrets from
+`<PROJECT_ROOT>/vault/` (`postgres.user`, `postgres.password`). `PROJECT_ROOT` defaults to the
+current directory. Point it at a copy outside the repository to keep local settings out of git.
+
+| Section | Key settings |
+|---|---|
+| `service` | host, port (8082), `root_path`, CORS origins |
+| `datasource` | PostgreSQL host, port, database `hawkerflow_order_db` |
+| `sqs` | `enabled`, `queue_url` of `order_queue`, `region_name`, `endpoint_url` (LocalStack) |
+| `events` | `enabled`, `topic_arn` of `order_status`, `region_name`, `endpoint_url` |
+
+Setting `sqs.enabled: false` turns off both the queue worker and `POST /orders/queue` (which then
+answers 503).
+
+## Run locally
+
+Prerequisites: Python 3.12, PostgreSQL with a `hawkerflow_order_db` database, and LocalStack.
+
+1. Create the messaging resources in LocalStack (once; match the region to your `config.yml`):
+   ```bash
+   aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name order_queue
+   aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name notifications_queue
+   aws --endpoint-url http://localhost:4566 sns create-topic --name order_status
+   aws --endpoint-url http://localhost:4566 sns subscribe --topic-arn <topic ARN> \
+     --protocol sqs --notification-endpoint <notifications_queue ARN>
+   ```
+2. Install and start:
+   ```bash
+   python -m venv .venv && .venv/Scripts/activate      # Windows; source .venv/bin/activate elsewhere
+   pip install -r requirements.txt -r requirements-dev.txt
+   PYTHONPATH=src python src/main.py
+   ```
+   The service creates its tables, starts the SQS worker, and listens on
+   `http://127.0.0.1:8082/hawkerflow`.
+
+## Tests
 
 ```bash
-# Get a diner IdToken (sign in via the app and copy it, or use scripts in README-notes)
-k6 run loadtest/order_flow.js \
-  -e API_URL=<ApiUrl> -e ID_TOKEN=<IdToken> -e STALL_ID=ahhock-cr -e ITEM_ID=cr
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q
 ```
 
-Watch Lambda `ConcurrentExecutions` and API latency in CloudWatch while it runs: scaling is
-automatic, thresholds assert p95 ≤ 300 ms (reads) / 500 ms (orders), error rate < 1%.
-A 10-minute run at 100 RPS costs roughly **US$3–5** (the only above-free-tier spend in the project).
+Tests run against in-memory SQLite with SQS and SNS clients mocked; no database or LocalStack
+needed.
 
-## Cost guardrails (why this stays ~$0/month)
+## Known gaps
 
-No always-on resources exist — no NAT gateway, no load balancer, no Kubernetes, no RDS.
-Lambda (1M req), DynamoDB (25 GB), SQS (1M req) sit inside AWS **always-free** monthly tiers;
-CloudFront within the 1 TB free transfer tier. Log retention is pinned to **14 days in the
-template**, and five CloudWatch alarms per stage (API 5xx, both DLQs, ordering and dispatcher
-errors) deploy with the stack - within the 10 always-free alarms. Keep the S$5 budget alarm on.
+Fine for local development; to fix before any public deployment:
 
-## Tear down
-
-```bash
-sam delete --stack-name hawkerflow-dev --region ap-southeast-1
-sam delete --stack-name hawkerflow-prod --region ap-southeast-1
-```
-
-(Empty the web bucket first if you synced the apps to it.)
+- **Authentication.** Stall endpoints accept an `X-Stall-ID` header from any caller, and the
+  bearer token's claims are read without verifying its signature.
+- **CORS** allows every origin (`allow_origins: '*'`).
+- **Infrastructure.** `infra/template.yaml` still describes the original Lambda + DynamoDB design;
+  nothing yet defines this service, its database or its queues for AWS.
+- **CI** (`.github/workflows/ci.yml`) is out of date: the test job installs only
+  `requirements-dev.txt` (no FastAPI or SQLModel), `bandit` scans `services` and `scripts`, which
+  don't exist, and `ruff check .` reports errors already on `release`.
+- `POST /v1/order/sqs/simulate` calls an async handler without `await`, so it returns before
+  processing the message.
