@@ -46,7 +46,7 @@ class TestSqsWorker(unittest.TestCase):
                 "orders": [
                     {
                         "stall_id": 105,
-                        "dishes": [{"dish_id": 10, "quantity": 2, "price": 4.50}],
+                        "dishes": [{"dish_id": 10, "dish_name": "Dish 10", "quantity": 2, "price": 4.50}],
                     }
                 ],
                 "total_price": 9.00,
