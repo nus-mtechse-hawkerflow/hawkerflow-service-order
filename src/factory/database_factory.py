@@ -1,7 +1,7 @@
-from factory.driver_factory import DriverFactory
 import importlib as im
-
 from typing import Any
+
+from factory.driver_factory import DriverFactory
 
 
 class DatabaseFactory(DriverFactory):

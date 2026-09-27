@@ -1,11 +1,11 @@
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
-import uuid
 
 import boto3
 

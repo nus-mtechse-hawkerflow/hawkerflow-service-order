@@ -1,4 +1,10 @@
-from sqlmodel import SQLModel, Field, Relationship
+from typing import TYPE_CHECKING
+
+from sqlmodel import Field, Relationship, SQLModel
+
+if TYPE_CHECKING:
+    from entities.order import Order
+    from entities.order_item import OrderItem
 
 
 class StallOrder(SQLModel, table=True):

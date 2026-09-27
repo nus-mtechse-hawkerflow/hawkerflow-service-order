@@ -1,7 +1,7 @@
 import asyncio
 import json
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, create_engine

@@ -1,5 +1,11 @@
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, Relationship
+from typing import TYPE_CHECKING
+
+from sqlmodel import Field, Relationship, SQLModel
+
+if TYPE_CHECKING:
+    from entities.order_item import OrderItem
+    from entities.stall_order import StallOrder
 
 
 class Order(SQLModel, table=True):

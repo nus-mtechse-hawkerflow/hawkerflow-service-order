@@ -1,11 +1,9 @@
-import asyncio
 import logging
 
 from models.order_details import OrderDetails
 from models.order_update import OrderUpdate
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
-
 
 logger = logging.getLogger("hawkerflow-order.order_service")
 
