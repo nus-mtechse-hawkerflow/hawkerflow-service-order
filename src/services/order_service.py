@@ -15,11 +15,18 @@ class OrderService:
         self._repo = repo
         self._publisher = event_publisher
 
-    def submit_order(self, order: OrderDetails):
-        return self._repo.create_order(order)
+    def submit_order(self, order: OrderDetails, order_ref: str | None = None):
+        return self._repo.create_order(order, order_ref=order_ref)
 
     def get_order(self, order_id: int):
         return self._repo.get_order(order_id)
+
+    def get_queued_order(self, order_ref: str) -> dict | None:
+        """The order created from a queued order_ref, or None while it is still queued."""
+        order_id = self._repo.get_order_id_by_ref(order_ref)
+        if order_id is None:
+            return None
+        return {"order_ref": order_ref, "order_id": order_id}
 
     def update_order(self, order_update: OrderUpdate):
         return self._repo.update_order(order_update.order_id, order_update.status)
@@ -59,7 +66,7 @@ class OrderService:
             case "ORDER_PLACE" | "ORDER_PLACED":
                 order_data = payload.get("data", payload)
                 order_details = OrderDetails(**order_data)
-                result = self.submit_order(order_details)
+                result = self.submit_order(order_details, order_ref=payload.get("order_ref"))
 
                 logger.info("Successfully created order via SQS: %s", result.get("order_id"))
                 return result

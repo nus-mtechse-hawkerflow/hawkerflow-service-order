@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 
 from entities.order import Order
 from entities.order_item import OrderItem
+from entities.order_request import OrderRequest
 from entities.stall_order import StallOrder
 from models.order_details import OrderDetails
 
@@ -12,7 +13,17 @@ class OrderRepo:
     def __init__(self, engine: Engine):
         self._engine = engine
 
-    def create_order(self, order_details: OrderDetails):
+    def create_order(self, order_details: OrderDetails, order_ref: str | None = None):
+        if order_ref:
+            # SQS delivers at least once. A ref already recorded means this
+            # message was processed before: return that order, don't add another.
+            # Two deliveries racing past this check still cannot both commit,
+            # because order_ref is the primary key of order_requests.
+            with Session(self._engine) as session:
+                existing = session.get(OrderRequest, order_ref)
+                if existing:
+                    return self._order_summary(session.get(Order, existing.f_order_id))
+
         order = Order(
             f_total_price=order_details.total_price,
             f_status="PENDING"
@@ -40,14 +51,28 @@ class OrderRepo:
 
         with Session(self._engine) as session:
             session.add(order)
+            if order_ref:
+                # Same transaction as the order, so a ref never points at a
+                # half-written order.
+                session.flush()
+                session.add(OrderRequest(f_order_ref=order_ref, f_order_id=order.f_id))
             session.commit()
             session.refresh(order)
-            return {
-                "order_id": order.f_id,
-                "total_price": order.f_total_price,
-                "order_status": order.f_status,
-                "order_created_at": order.f_created_at.strftime("%Y-%m-%d %H:%M:%S")
-            }
+            return self._order_summary(order)
+
+    def get_order_id_by_ref(self, order_ref: str) -> int | None:
+        with Session(self._engine) as session:
+            request = session.get(OrderRequest, order_ref)
+            return request.f_order_id if request else None
+
+    @staticmethod
+    def _order_summary(order: Order) -> dict:
+        return {
+            "order_id": order.f_id,
+            "total_price": order.f_total_price,
+            "order_status": order.f_status,
+            "order_created_at": order.f_created_at.strftime("%Y-%m-%d %H:%M:%S")
+        }
 
     def get_order(self, order_id: int):
         statement = select(Order).where(Order.f_id == order_id)

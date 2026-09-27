@@ -15,6 +15,42 @@ from services.order_service import OrderService
 logger = logging.getLogger("hawkerflow-order.sqs_worker")
 
 
+def create_sqs_client(config: SqsConfig):
+    """Initializes the boto3 SQS client, auto-detecting LocalStack and dev credentials."""
+    client_kwargs: dict[str, Any] = {
+        "region_name": config.region_name,
+    }
+
+    # Determine endpoint URL
+    endpoint = config.endpoint_url
+    if not endpoint and config.queue_url:
+        parsed = urlparse(config.queue_url)
+        if any(host in parsed.netloc for host in ("localhost", "127.0.0.1", "localstack")):
+            endpoint = f"{parsed.scheme}://{parsed.netloc}"
+
+    if endpoint:
+        client_kwargs["endpoint_url"] = endpoint
+        # Local development / LocalStack SSL handling
+        client_kwargs["verify"] = False
+        # Default dummy credentials for LocalStack if none are provided
+        client_kwargs["aws_access_key_id"] = (
+            config.access_key_id
+            or os.getenv("AWS_ACCESS_KEY_ID")
+            or "test"
+        )
+        client_kwargs["aws_secret_access_key"] = (
+            config.secret_access_key
+            or os.getenv("AWS_SECRET_ACCESS_KEY")
+            or "test"
+        )
+        logger.info("Configured SQS client for local endpoint: %s", endpoint)
+    elif config.access_key_id and config.secret_access_key:
+        client_kwargs["aws_access_key_id"] = config.access_key_id
+        client_kwargs["aws_secret_access_key"] = config.secret_access_key
+
+    return boto3.client("sqs", **client_kwargs)
+
+
 class SqsWorker:
     """
     Background worker that continuously long-polls an AWS SQS queue for order events.
@@ -40,42 +76,7 @@ class SqsWorker:
         if sqs_client is not None:
             self._sqs = sqs_client
         else:
-            self._sqs = self._init_sqs_client()
-
-    def _init_sqs_client(self):
-        """Initializes the boto3 SQS client, auto-detecting LocalStack and dev credentials."""
-        client_kwargs: dict[str, Any] = {
-            "region_name": self.config.region_name,
-        }
-
-        # Determine endpoint URL
-        endpoint = self.config.endpoint_url
-        if not endpoint and self.config.queue_url:
-            parsed = urlparse(self.config.queue_url)
-            if any(host in parsed.netloc for host in ("localhost", "127.0.0.1", "localstack")):
-                endpoint = f"{parsed.scheme}://{parsed.netloc}"
-
-        if endpoint:
-            client_kwargs["endpoint_url"] = endpoint
-            # Local development / LocalStack SSL handling
-            client_kwargs["verify"] = False
-            # Default dummy credentials for LocalStack if none are provided
-            client_kwargs["aws_access_key_id"] = (
-                self.config.access_key_id
-                or os.getenv("AWS_ACCESS_KEY_ID")
-                or "test"
-            )
-            client_kwargs["aws_secret_access_key"] = (
-                self.config.secret_access_key
-                or os.getenv("AWS_SECRET_ACCESS_KEY")
-                or "test"
-            )
-            logger.info("Configured SQS client for local endpoint: %s", endpoint)
-        elif self.config.access_key_id and self.config.secret_access_key:
-            client_kwargs["aws_access_key_id"] = self.config.access_key_id
-            client_kwargs["aws_secret_access_key"] = self.config.secret_access_key
-
-        return boto3.client("sqs", **client_kwargs)
+            self._sqs = create_sqs_client(self.config)
 
     async def start(self) -> None:
         """Continuously long-polls SQS until stop() is called or task is cancelled."""

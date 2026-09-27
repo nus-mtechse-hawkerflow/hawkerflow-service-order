@@ -12,6 +12,7 @@ from session.db_session import DBSession
 from services.order_service import OrderService
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
+from services.order_queue_producer import OrderQueueProducer
 from workers.sqs_worker import SqsWorker
 
 logger = logging.getLogger("hawkerflow-order.lifecycle")
@@ -38,7 +39,13 @@ async def startup(app: FastAPI):
     # Start background SQS worker if enabled in configuration
     worker = None
     worker_task = None
+    app.state.order_queue_producer = None
     if config.sqs and config.sqs.enabled and config.sqs.queue_url:
+        try:
+            app.state.order_queue_producer = OrderQueueProducer(config.sqs)
+        except Exception as e:
+            logger.exception("❌ Failed to create the order queue producer: %s", e)
+
         logger.info(
             "🚀 Initializing background SQS worker on queue: %s (region: %s)",
             config.sqs.queue_url,
