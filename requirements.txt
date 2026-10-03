@@ -12,7 +12,7 @@ fastapi==0.141.1
 h11==0.16.0
 idna==3.19
 jmespath==1.1.0
-psycopg2==2.9.13
+psycopg2-binary==2.9.13
 pydantic==2.13.5
 pydantic-settings==2.15.0
 pydantic_core==2.46.5

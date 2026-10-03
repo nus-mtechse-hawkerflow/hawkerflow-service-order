@@ -20,8 +20,8 @@ class PostgresDriver(Driver):
         if self._connection_url is None:
             self._connection_url = URL.create(
                 self._config.database.driver_name,
-                self._config.options.user.get_secret_value(),
-                self._config.options.password.get_secret_value(),
+                self._config.options.user,
+                self._config.options.password,
                 self._config.database.host,
                 self._config.database.port,
                 self._config.database.name

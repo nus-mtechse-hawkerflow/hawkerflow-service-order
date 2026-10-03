@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from configurations.app_config import AppConfig
+from endpoints.health_routes import health_router
 from endpoints.order_routes import order_router
 from lifecycle.lifespan import startup
 
@@ -64,6 +65,7 @@ class HawkerFlowOrder:
 
     def _include_routers(self):
         self._app.include_router(order_router)
+        self._app.include_router(health_router)
 
 
 if __name__ == "__main__":

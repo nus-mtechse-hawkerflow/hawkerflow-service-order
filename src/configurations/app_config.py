@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -28,9 +28,9 @@ class Service(BaseSettings):
 class Database(BaseSettings):
     connection_url: str
     driver_name: str
-    name: str
-    host: str
-    port: int
+    name: str = os.getenv("DB_NAME", "hawkerflow")
+    host: str = os.getenv("DB_HOST", "localhost")
+    port: int = int(os.getenv("DB_PORT", 5432))
 
 
 class Driver(BaseSettings):
@@ -39,11 +39,9 @@ class Driver(BaseSettings):
 
 
 class DatabaseOptions(BaseSettings):
-    user: SecretStr = Field(alias="postgres.user")
-    password: SecretStr = Field(alias="postgres.password")
+    user: str = os.getenv("DB_USERNAME", "user")
+    password: str = os.getenv("DB_PASSWORD", "root")
     echo: bool
-
-    model_config = SettingsConfigDict(secrets_dir=Path(os.getenv('PROJECT_ROOT') or ".") / "vault")
 
 
 class Datasource(BaseSettings):
@@ -67,8 +65,8 @@ class SqsConfig(BaseSettings):
 class EventsConfig(BaseSettings):
     enabled: bool = True
     topic_arn: str | None = None
-    notification_queue_url: str = "https://localhost.localstack.cloud:4566/000000000000/notifications_queue"
-    region_name: str = "us-east-1"
+    notification_queue_url: str = ""
+    region_name: str = "ap-southeast-1"
     endpoint_url: str | None = None
     access_key_id: str | None = None
     secret_access_key: str | None = None
