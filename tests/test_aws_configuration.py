@@ -1,0 +1,81 @@
+import os
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from configurations.app_config import AppConfig, SqsConfig
+from lifecycle.lifespan import create_queue_components
+
+REPO_ROOT = str(Path(__file__).resolve().parents[1])
+QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/123456789012/hawkerflow-dev-order-queue"
+
+
+class TestConfigurationFromEnvironment(unittest.TestCase):
+    """
+    On AWS the task definition supplies the queue and event settings as
+    environment variables, which must win over the LocalStack values that
+    resources/config.yml ships with.
+    """
+
+    def _config(self, env: dict[str, str]) -> AppConfig:
+        with patch.dict(os.environ, {"PROJECT_ROOT": REPO_ROOT, **env}):
+            return AppConfig()
+
+    def test_config_yml_alone_leaves_the_queue_off(self):
+        config = self._config({})
+
+        self.assertIn("localhost", config.sqs.queue_url)
+        self.assertFalse(config.sqs.enabled)
+
+    def test_environment_overrides_the_queue_settings(self):
+        config = self._config({
+            "SQS__ENABLED": "true",
+            "SQS__QUEUE_URL": QUEUE_URL,
+            "SQS__REGION_NAME": "ap-southeast-1",
+        })
+
+        self.assertTrue(config.sqs.enabled)
+        self.assertEqual(config.sqs.queue_url, QUEUE_URL)
+        # No endpoint override: boto3 must talk to real SQS with the task role
+        self.assertIsNone(config.sqs.endpoint_url)
+        # Settings the environment does not mention still come from config.yml
+        self.assertEqual(config.sqs.visibility_timeout, 60)
+
+    def test_environment_can_switch_event_publishing_off(self):
+        config = self._config({"EVENTS__ENABLED": "false"})
+
+        self.assertFalse(config.events.enabled)
+
+    def test_database_settings_are_unaffected(self):
+        config = self._config({"SQS__QUEUE_URL": QUEUE_URL})
+
+        self.assertEqual(config.datasource.database.driver_name, "postgresql+psycopg2")
+
+
+class TestQueueComponents(unittest.TestCase):
+    def test_enabled_queue_creates_a_producer_and_a_worker(self):
+        sqs = SqsConfig(enabled=True, queue_url=QUEUE_URL, region_name="ap-southeast-1")
+
+        with patch("workers.sqs_worker.boto3.client", return_value=MagicMock()) as client:
+            producer, worker = create_queue_components(sqs, MagicMock())
+
+        self.assertIsNotNone(producer)
+        self.assertIsNotNone(worker)
+        # A real AWS queue must use the task role, not LocalStack's dummy keys
+        for call in client.call_args_list:
+            self.assertNotIn("endpoint_url", call.kwargs)
+            self.assertNotIn("aws_access_key_id", call.kwargs)
+
+    def test_disabled_queue_creates_nothing(self):
+        sqs = SqsConfig(enabled=False, queue_url=QUEUE_URL)
+
+        self.assertEqual(create_queue_components(sqs, MagicMock()), (None, None))
+
+    def test_missing_queue_configuration_creates_nothing(self):
+        self.assertEqual(create_queue_components(None, MagicMock()), (None, None))
+        no_url = SqsConfig(enabled=True, queue_url="")
+        self.assertEqual(create_queue_components(no_url, MagicMock()), (None, None))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from sqlmodel import SQLModel
 
-from configurations.app_config import AppConfig
+from configurations.app_config import AppConfig, SqsConfig
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
 from services.order_queue_producer import OrderQueueProducer
@@ -16,6 +16,20 @@ from session.db_session import DBSession
 from workers.sqs_worker import SqsWorker
 
 logger = logging.getLogger("hawkerflow-order.lifecycle")
+
+
+def create_queue_components(
+    sqs: SqsConfig | None,
+    order_service: OrderService,
+) -> tuple[OrderQueueProducer | None, SqsWorker | None]:
+    """
+    Builds the order queue producer and its background worker, or (None, None)
+    when the queue is disabled or has no URL configured.
+    """
+    if not (sqs and sqs.enabled and sqs.queue_url):
+        return None, None
+
+    return OrderQueueProducer(sqs), SqsWorker(sqs, order_service)
 
 
 @asynccontextmanager
@@ -37,42 +51,38 @@ async def startup(app: FastAPI):
     app.state.order_service = order_service
 
     # Start background SQS worker if enabled in configuration
-    # worker = None
-    # worker_task = None
-    # app.state.order_queue_producer = None
-    # if config.sqs and config.sqs.enabled and config.sqs.queue_url:
-    #     try:
-    #         app.state.order_queue_producer = OrderQueueProducer(config.sqs)
-    #     except Exception as e:
-    #         logger.exception("❌ Failed to create the order queue producer: %s", e)
-    #
-    #     logger.info(
-    #         "🚀 Initializing background SQS worker on queue: %s (region: %s)",
-    #         config.sqs.queue_url,
-    #         config.sqs.region_name,
-    #     )
-    #     try:
-    #         worker = SqsWorker(config.sqs, order_service)
-    #         app.state.sqs_worker = worker
-    #         worker_task = asyncio.create_task(worker.start())
-    #     except Exception as e:
-    #         logger.exception("❌ Failed to start SQS Worker during lifespan startup: %s", e)
-    # else:
-    #     logger.warning(
-    #         "⚠️ SQS Background Worker is DISABLED (sqs.enabled=false or queue_url is empty). "
-    #         "Set sqs.enabled: true in resources/config.yml to enable."
-    #     )
-    #     app.state.sqs_worker = None
+    worker = None
+    worker_task = None
+    app.state.order_queue_producer = None
+    app.state.sqs_worker = None
+    try:
+        app.state.order_queue_producer, worker = create_queue_components(config.sqs, order_service)
+    except Exception as e:
+        logger.exception("❌ Failed to set up the order queue during lifespan startup: %s", e)
+
+    if worker:
+        logger.info(
+            "🚀 Initializing background SQS worker on queue: %s (region: %s)",
+            config.sqs.queue_url,
+            config.sqs.region_name,
+        )
+        app.state.sqs_worker = worker
+        worker_task = asyncio.create_task(worker.start())
+    else:
+        logger.warning(
+            "⚠️ SQS Background Worker is DISABLED (sqs.enabled=false or queue_url is empty). "
+            "Set sqs.enabled: true in resources/config.yml to enable."
+        )
 
     yield
 
     # Clean shutdown of background worker
-    # if worker and worker_task:
-    #     logger.info("Shutting down background SQS Worker...")
-    #     worker.stop()
-    #     worker_task.cancel()
-    #     try:
-    #         await worker_task
-    #     except asyncio.CancelledError:
-    #         pass
-    #     logger.info("SQS Worker shutdown complete.")
+    if worker and worker_task:
+        logger.info("Shutting down background SQS Worker...")
+        worker.stop()
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("SQS Worker shutdown complete.")

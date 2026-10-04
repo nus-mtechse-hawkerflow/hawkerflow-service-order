@@ -78,8 +78,11 @@ class AppConfig(BaseSettings):
     sqs: SqsConfig | None = None
     events: EventsConfig = Field(default_factory=EventsConfig)
 
+    # env_nested_delimiter lets a deployment override one nested setting, e.g.
+    # SQS__QUEUE_URL or EVENTS__ENABLED, without replacing config.yml.
     model_config = SettingsConfigDict(
-        yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml"
+        yaml_file=Path((os.getenv('PROJECT_ROOT')) or '.') / 'resources' / "config.yml",
+        env_nested_delimiter="__",
     )
 
     @classmethod
