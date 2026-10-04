@@ -72,11 +72,19 @@ class EventsConfig(BaseSettings):
     secret_access_key: str | None = None
 
 
+class ExpiryConfig(BaseSettings):
+    enabled: bool = False
+    pending_minutes: int = 15
+    interval_seconds: int = 60
+    complete_ready_at_day_end: bool = True
+
+
 class AppConfig(BaseSettings):
     service: Service
     datasource: Datasource
     sqs: SqsConfig | None = None
     events: EventsConfig = Field(default_factory=EventsConfig)
+    expiry: ExpiryConfig = Field(default_factory=ExpiryConfig)
 
     # env_nested_delimiter lets a deployment override one nested setting, e.g.
     # SQS__QUEUE_URL or EVENTS__ENABLED, without replacing config.yml.

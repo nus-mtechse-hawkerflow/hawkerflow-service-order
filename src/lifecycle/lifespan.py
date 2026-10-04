@@ -7,12 +7,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from sqlmodel import SQLModel
 
-from configurations.app_config import AppConfig, SqsConfig
+from configurations.app_config import AppConfig, ExpiryConfig, SqsConfig
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
 from services.order_queue_producer import OrderQueueProducer
 from services.order_service import OrderService
 from session.db_session import DBSession
+from workers.order_expiry import OrderExpiryWorker
 from workers.sqs_worker import SqsWorker
 
 logger = logging.getLogger("hawkerflow-order.lifecycle")
@@ -30,6 +31,14 @@ def create_queue_components(
         return None, None
 
     return OrderQueueProducer(sqs), SqsWorker(sqs, order_service)
+
+
+def create_expiry_worker(expiry: ExpiryConfig | None, repo: OrderRepo) -> OrderExpiryWorker | None:
+    """Builds the order expiry worker, or None when expiry is switched off."""
+    if not (expiry and expiry.enabled):
+        return None
+
+    return OrderExpiryWorker(expiry, repo)
 
 
 @asynccontextmanager
@@ -74,7 +83,19 @@ async def startup(app: FastAPI):
             "Set sqs.enabled: true in resources/config.yml to enable."
         )
 
+    # Start the order expiry worker if a deployment has switched it on
+    expiry_worker = create_expiry_worker(config.expiry, order_repo)
+    expiry_task = asyncio.create_task(expiry_worker.start()) if expiry_worker else None
+
     yield
+
+    if expiry_worker and expiry_task:
+        expiry_worker.stop()
+        expiry_task.cancel()
+        try:
+            await expiry_task
+        except asyncio.CancelledError:
+            pass
 
     # Clean shutdown of background worker
     if worker and worker_task:

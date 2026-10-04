@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import boto3
+from botocore.config import Config
 
 from configurations.app_config import EventsConfig
 
@@ -31,6 +32,9 @@ class EventPublisher:
         service_name = "sns" if self._is_sns else "sqs"
         client_kwargs: dict[str, Any] = {
             "region_name": self.config.region_name,
+            # Publishing is awaited inside the request that places or updates an
+            # order, so an unreachable topic must fail quickly, not hang the diner.
+            "config": Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2}),
         }
 
         # Auto-detect LocalStack endpoint URL
@@ -99,10 +103,15 @@ class EventPublisher:
                     Message=body_str,
                     MessageAttributes=sns_attrs,
                 )
+                # Order, stall and status are logged so a status change can be
+                # followed in the log without opening the message itself.
                 logger.info(
-                    "📢 Published %s event to SNS topic: %s",
+                    "📢 Published %s event to SNS topic: %s (order %s, stall %s, status %s)",
                     event_type,
                     self.config.topic_arn,
+                    data.get("order_id"),
+                    data.get("stall_id"),
+                    data.get("status"),
                 )
             else:
                 sqs_target = self.config.notification_queue_url

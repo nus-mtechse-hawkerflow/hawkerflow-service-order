@@ -36,8 +36,17 @@ sqs:
   max_number_of_messages: 10
   visibility_timeout: 60
 
+# Cancels orders no stall accepted in time and completes uncollected ready
+# orders after the Singapore day ends. Off unless EXPIRY__ENABLED=true.
+expiry:
+  enabled: false
+  pending_minutes: 15
+  interval_seconds: 60
+  complete_ready_at_day_end: true
+
+# Publishes an event for every step of an order. Off unless a deployment
+# sets EVENTS__ENABLED=true and EVENTS__TOPIC_ARN (AWS does this in Terraform).
 events:
-  enabled: true
+  enabled: false
   topic_arn: "arn:aws:sns:us-east-1:000000000000:order_status"
   region_name: "ap-southeast-1"
-  endpoint_url: "http://localhost:4566"

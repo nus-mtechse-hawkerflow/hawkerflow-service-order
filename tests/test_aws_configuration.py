@@ -5,9 +5,11 @@ from unittest.mock import MagicMock, patch
 
 from configurations.app_config import AppConfig, SqsConfig
 from lifecycle.lifespan import create_queue_components
+from services.event_publisher import EventPublisher
 
 REPO_ROOT = str(Path(__file__).resolve().parents[1])
 QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/123456789012/hawkerflow-dev-order-queue"
+TOPIC_ARN = "arn:aws:sns:ap-southeast-1:123456789012:hawkerflow-dev-order-status"
 
 
 class TestConfigurationFromEnvironment(unittest.TestCase):
@@ -41,10 +43,37 @@ class TestConfigurationFromEnvironment(unittest.TestCase):
         # Settings the environment does not mention still come from config.yml
         self.assertEqual(config.sqs.visibility_timeout, 60)
 
-    def test_environment_can_switch_event_publishing_off(self):
-        config = self._config({"EVENTS__ENABLED": "false"})
+    def test_config_yml_alone_leaves_event_publishing_off(self):
+        config = self._config({})
 
         self.assertFalse(config.events.enabled)
+
+    def test_environment_turns_event_publishing_on_for_a_real_topic(self):
+        config = self._config({
+            "EVENTS__ENABLED": "true",
+            "EVENTS__TOPIC_ARN": TOPIC_ARN,
+            "EVENTS__REGION_NAME": "ap-southeast-1",
+        })
+
+        self.assertTrue(config.events.enabled)
+        self.assertEqual(config.events.topic_arn, TOPIC_ARN)
+        # No endpoint override: boto3 must talk to real SNS with the task role
+        self.assertIsNone(config.events.endpoint_url)
+
+    def test_publisher_for_a_real_topic_uses_the_task_role_and_fails_fast(self):
+        config = self._config({"EVENTS__ENABLED": "true", "EVENTS__TOPIC_ARN": TOPIC_ARN})
+
+        with patch("services.event_publisher.boto3.client", return_value=MagicMock()) as client:
+            EventPublisher(config.events)
+
+        service_name = client.call_args.args[0]
+        kwargs = client.call_args.kwargs
+        self.assertEqual(service_name, "sns")
+        self.assertNotIn("endpoint_url", kwargs)
+        self.assertNotIn("aws_access_key_id", kwargs)
+        # Publishing is awaited while the diner waits, so it must not hang
+        self.assertLessEqual(kwargs["config"].connect_timeout, 5)
+        self.assertLessEqual(kwargs["config"].read_timeout, 5)
 
     def test_database_settings_are_unaffected(self):
         config = self._config({"SQS__QUEUE_URL": QUEUE_URL})

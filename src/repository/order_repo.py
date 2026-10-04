@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime
 
 from sqlalchemy import Engine
 from sqlmodel import Session, select
@@ -183,13 +184,9 @@ class OrderRepo:
             parent_order = session.exec(order_statement).first()
 
             if parent_order:
-                statuses = [so.f_status for so in all_stall_orders]
-                if all(s == "COMPLETED" for s in statuses):
-                    parent_order.f_status = "COMPLETED"
-                elif all(s == "READY" for s in statuses):
-                    parent_order.f_status = "READY"
-                elif any(s in ("PREPARING", "READY", "ACCEPTED") for s in statuses):
-                    parent_order.f_status = "IN_PROGRESS"
+                parent_status = self._parent_status([so.f_status for so in all_stall_orders])
+                if parent_status:
+                    parent_order.f_status = parent_status
                 session.add(parent_order)
 
             session.commit()
@@ -202,6 +199,64 @@ class OrderRepo:
                 "status": stall_order.f_status,
                 "subtotal": stall_order.f_subtotal
             }
+
+    @staticmethod
+    def _parent_status(statuses: list[str]) -> str | None:
+        """The status an order takes from its stall orders, or None to leave it unchanged."""
+        if all(s == "COMPLETED" for s in statuses):
+            return "COMPLETED"
+        if all(s == "READY" for s in statuses):
+            return "READY"
+        if any(s in ("PREPARING", "READY", "ACCEPTED") for s in statuses):
+            return "IN_PROGRESS"
+        if all(s == "CANCELLED" for s in statuses):
+            return "CANCELLED"
+        if all(s in ("COMPLETED", "CANCELLED") for s in statuses):
+            return "COMPLETED"
+        return None
+
+    def expire_stale_stall_orders(
+        self,
+        pending_before: datetime,
+        ready_before: datetime | None = None,
+    ) -> dict[str, int]:
+        """
+        Cancels stall orders still PENDING on an order placed before
+        `pending_before`, and completes those still READY on an order placed
+        before `ready_before`. Both cut-offs are naive UTC, like f_created_at.
+        """
+        rules = [("PENDING", "CANCELLED", pending_before)]
+        if ready_before is not None:
+            rules.append(("READY", "COMPLETED", ready_before))
+
+        changed = {"CANCELLED": 0, "COMPLETED": 0}
+        with Session(self._engine) as session:
+            touched_order_ids: set[int] = set()
+
+            for from_status, to_status, placed_before in rules:
+                statement = (
+                    select(StallOrder)
+                    .join(Order, Order.f_id == StallOrder.f_order_id)
+                    .where(StallOrder.f_status == from_status, Order.f_created_at < placed_before)
+                )
+                for stall_order in session.exec(statement).all():
+                    stall_order.f_status = to_status
+                    session.add(stall_order)
+                    touched_order_ids.add(stall_order.f_order_id)
+                    changed[to_status] += 1
+
+            session.flush()
+            for order_id in touched_order_ids:
+                siblings = session.exec(select(StallOrder).where(StallOrder.f_order_id == order_id)).all()
+                parent_status = self._parent_status([so.f_status for so in siblings])
+                parent_order = session.get(Order, order_id)
+                if parent_order and parent_status:
+                    parent_order.f_status = parent_status
+                    session.add(parent_order)
+
+            session.commit()
+
+        return {"cancelled": changed["CANCELLED"], "completed": changed["COMPLETED"]}
 
     def _populate_order_details(self, order_items: list[OrderItem]):
         grouped = defaultdict(list)
