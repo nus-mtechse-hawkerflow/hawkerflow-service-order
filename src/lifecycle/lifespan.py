@@ -10,7 +10,6 @@ from sqlmodel import SQLModel
 from configurations.app_config import AppConfig, ExpiryConfig, SqsConfig
 from repository.order_repo import OrderRepo
 from services.event_publisher import EventPublisher
-from services.order_queue_producer import OrderQueueProducer
 from services.order_service import OrderService
 from session.db_session import DBSession
 from workers.order_expiry import OrderExpiryWorker
@@ -19,18 +18,15 @@ from workers.sqs_worker import SqsWorker
 logger = logging.getLogger("hawkerflow-order.lifecycle")
 
 
-def create_queue_components(
-    sqs: SqsConfig | None,
-    order_service: OrderService,
-) -> tuple[OrderQueueProducer | None, SqsWorker | None]:
+def create_queue_worker(sqs: SqsConfig | None, order_service: OrderService) -> SqsWorker | None:
     """
-    Builds the order queue producer and its background worker, or (None, None)
-    when the queue is disabled or has no URL configured.
+    Builds the background worker that creates the orders API Gateway puts on
+    the order queue, or None when the queue is disabled or has no URL configured.
     """
     if not (sqs and sqs.enabled and sqs.queue_url):
-        return None, None
+        return None
 
-    return OrderQueueProducer(sqs), SqsWorker(sqs, order_service)
+    return SqsWorker(sqs, order_service)
 
 
 def create_expiry_worker(
@@ -66,10 +62,9 @@ async def startup(app: FastAPI):
     # Start background SQS worker if enabled in configuration
     worker = None
     worker_task = None
-    app.state.order_queue_producer = None
     app.state.sqs_worker = None
     try:
-        app.state.order_queue_producer, worker = create_queue_components(config.sqs, order_service)
+        worker = create_queue_worker(config.sqs, order_service)
     except Exception as e:
         logger.exception("❌ Failed to set up the order queue during lifespan startup: %s", e)
 

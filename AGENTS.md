@@ -203,7 +203,6 @@ All routes are prefixed by `/v1/order` (and mounted under `service.root_path = /
 | Method | Path | Auth Required | Description |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/v1/order/orders` | None (Diner) | Submit a new order (can span multiple stalls). |
-| `POST` | `/v1/order/orders/queue` | None (Diner) | Queue an order on `order_queue`; answers `202` with an `order_ref` (`503` if SQS is disabled). |
 | `GET` | `/v1/order/orders/queue/{order_ref}` | None (Diner) | `202 PENDING` until the SQS worker creates the order, then `200` with its `order_id`. |
 | `GET` | `/v1/order/orders/{order_id}` | None (Diner) | Retrieve full order details and all items. |
 | `PUT` | `/v1/order/orders/update` | None / Internal | Update global order status. |

@@ -11,15 +11,18 @@ locally). The other HawkerFlow services (hawker, customer, analytics) and the tw
 ## How orders flow
 
 ```
-diner-ui ──POST /orders/queue──▶ order_queue (SQS) ──▶ SQS worker ──┐
+diner-ui ──POST /orders/queue──▶ API Gateway ──▶ order_queue (SQS) ──▶ SQS worker ──┐
                                                                     ├─▶ PostgreSQL ──▶ hawker-ui (polls)
 hawker-ui (counter) ──POST /orders──────────────────────────────────┘        │
                                                                               ▼
 hawker-ui ──PATCH status──▶ order service ──▶ order_status (SNS) ──▶ notifications_queue (SQS)
 ```
 
-- **Queued intake (diner app).** `POST /v1/order/orders/queue` puts an `ORDER_PLACED` message on
-  `order_queue` and answers **202** with an `order_ref`. The background worker creates the order.
+- **Queued intake (diner app).** API Gateway answers `POST /v1/order/orders/queue` itself and puts
+  the diner's `ORDER_PLACED` message straight on `order_queue`; this service does not receive that
+  request. The diner chooses the `order_ref`. Orders are therefore accepted while this service is
+  down, and created when its worker next runs. Nothing checks an order's shape before it is queued:
+  one the worker cannot create is retried five times and then set aside in the dead-letter queue.
   The diner polls `GET /v1/order/orders/queue/{order_ref}`: **202 PENDING** until the order exists,
   then **200** with its `order_id`. SQS delivers at least once, so a redelivered message with a
   known `order_ref` returns the existing order instead of creating a second one.
@@ -60,7 +63,6 @@ All paths are served under `service.root_path` (`/hawkerflow`), e.g.
 
 | Method | Path | Used by | Purpose |
 |---|---|---|---|
-| `POST` | `/v1/order/orders/queue` | diner-ui | Queue an order; **202** with `order_ref` (**503** if SQS is disabled) |
 | `GET` | `/v1/order/orders/queue/{order_ref}` | diner-ui | **202 PENDING**, then **200** with `order_id` |
 | `POST` | `/v1/order/orders` | hawker-ui counter | Create an order immediately |
 | `GET` | `/v1/order/orders/{order_id}` | diner-ui tracker | Order with items, status, `dining_option`, `takeaway_fee` |
@@ -111,8 +113,7 @@ current directory. Point it at a copy outside the repository to keep local setti
 | `sqs` | `enabled`, `queue_url` of `order_queue`, `region_name`, `endpoint_url` (LocalStack) |
 | `events` | `enabled`, `topic_arn` of `order_status`, `region_name`, `endpoint_url` |
 
-Setting `sqs.enabled: false` turns off both the queue worker and `POST /orders/queue` (which then
-answers 503).
+Setting `sqs.enabled: false` turns off the queue worker, so queued orders are not created.
 
 ## Run locally
 

@@ -12,7 +12,6 @@ from entities.order import Order
 from models.order_details import Dish, OrderDetails
 from models.order_details import Order as OrderDto
 from repository.order_repo import OrderRepo
-from services.order_queue_producer import OrderQueueProducer
 from services.order_service import OrderService
 from workers.sqs_worker import SqsWorker
 
@@ -72,12 +71,14 @@ class TestDiningOption(unittest.TestCase):
             queue_url="https://sqs.local/000000000000/order_queue",
             region_name="ap-southeast-1",
         )
-        sqs = MagicMock()
-        order_ref = asyncio.run(OrderQueueProducer(config, sqs_client=sqs).enqueue_order(
-            _order(dining_option="takeaway", takeaway_fee=0.30)
-        ))
+        order_ref = "ref-takeaway"
+        # The message as diner-ui posts it and API Gateway queues it
+        body = json.dumps({
+            "event_type": "ORDER_PLACED",
+            "order_ref": order_ref,
+            "data": _order(dining_option="takeaway", takeaway_fee=0.30).model_dump(),
+        })
         worker = SqsWorker(config, self.service, sqs_client=MagicMock())
-        body = sqs.send_message.call_args.kwargs["MessageBody"]
 
         asyncio.run(worker._handle_message({"MessageId": "m1", "ReceiptHandle": "r1", "Body": body}))
 

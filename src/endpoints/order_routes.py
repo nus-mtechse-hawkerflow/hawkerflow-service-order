@@ -7,7 +7,6 @@ from dependencies.auth import get_current_stall_id, verify_stall_access
 from models.order_details import OrderDetails
 from models.order_update import OrderUpdate
 from models.stall_order_update import StallOrderUpdate
-from services.order_queue_producer import OrderQueueProducer
 from services.order_service import OrderService
 
 order_router = APIRouter(prefix="/v1/order")
@@ -15,10 +14,6 @@ order_router = APIRouter(prefix="/v1/order")
 
 def get_order_service(request: Request) -> OrderService:
     return request.app.state.order_service
-
-
-def get_order_queue_producer(request: Request) -> OrderQueueProducer | None:
-    return getattr(request.app.state, "order_queue_producer", None)
 
 
 # ---------------- Diner & General Endpoints ----------------
@@ -36,38 +31,16 @@ async def submit_order(
     )
 
 
-@order_router.post("/orders/queue")
-async def queue_order(
-    orders: OrderDetails,
-    producer: Annotated[OrderQueueProducer | None, Depends(get_order_queue_producer)],
-):
-    """
-    Place an order through order_queue. Answers 202 with an order_ref at once;
-    the SQS worker creates the order, and GET /orders/queue/{order_ref}
-    returns its order_id when it exists.
-    """
-    if producer is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Order queue is not configured; use POST /v1/order/orders",
-        )
-
-    order_ref = await producer.enqueue_order(orders)
-    return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
-        content={
-            "message": "Order queued",
-            "order_ref": order_ref,
-            "status": "QUEUED",
-        },
-    )
-
-
 @order_router.get("/orders/queue/{order_ref}")
 async def get_queued_order(
     order_ref: str,
     order_service: Annotated[OrderService, Depends(get_order_service)],
 ):
+    """
+    Looks up an order placed through order_queue. API Gateway puts the diner's
+    order straight on the queue under an order_ref the diner chose; this
+    answers 202 PENDING until the SQS worker has created it, then its order_id.
+    """
     queued = order_service.get_queued_order(order_ref)
     if queued is None:
         return JSONResponse(

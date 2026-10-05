@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from configurations.app_config import AppConfig, SqsConfig
-from lifecycle.lifespan import create_queue_components
+from lifecycle.lifespan import create_queue_worker
 from services.event_publisher import EventPublisher
 
 REPO_ROOT = str(Path(__file__).resolve().parents[1])
@@ -82,13 +82,12 @@ class TestConfigurationFromEnvironment(unittest.TestCase):
 
 
 class TestQueueComponents(unittest.TestCase):
-    def test_enabled_queue_creates_a_producer_and_a_worker(self):
+    def test_enabled_queue_creates_a_worker(self):
         sqs = SqsConfig(enabled=True, queue_url=QUEUE_URL, region_name="ap-southeast-1")
 
         with patch("workers.sqs_worker.boto3.client", return_value=MagicMock()) as client:
-            producer, worker = create_queue_components(sqs, MagicMock())
+            worker = create_queue_worker(sqs, MagicMock())
 
-        self.assertIsNotNone(producer)
         self.assertIsNotNone(worker)
         # A real AWS queue must use the task role, not LocalStack's dummy keys
         for call in client.call_args_list:
@@ -98,12 +97,12 @@ class TestQueueComponents(unittest.TestCase):
     def test_disabled_queue_creates_nothing(self):
         sqs = SqsConfig(enabled=False, queue_url=QUEUE_URL)
 
-        self.assertEqual(create_queue_components(sqs, MagicMock()), (None, None))
+        self.assertIsNone(create_queue_worker(sqs, MagicMock()))
 
     def test_missing_queue_configuration_creates_nothing(self):
-        self.assertEqual(create_queue_components(None, MagicMock()), (None, None))
+        self.assertIsNone(create_queue_worker(None, MagicMock()))
         no_url = SqsConfig(enabled=True, queue_url="")
-        self.assertEqual(create_queue_components(no_url, MagicMock()), (None, None))
+        self.assertIsNone(create_queue_worker(no_url, MagicMock()))
 
 
 if __name__ == "__main__":

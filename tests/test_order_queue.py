@@ -3,16 +3,14 @@ import json
 import unittest
 from unittest.mock import MagicMock
 
-from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, create_engine
 
 from configurations.app_config import SqsConfig
-from endpoints.order_routes import get_queued_order, queue_order
+from endpoints.order_routes import get_queued_order
 from models.order_details import Dish, OrderDetails
 from models.order_details import Order as OrderDto
 from repository.order_repo import OrderRepo
-from services.order_queue_producer import OrderQueueProducer
 from services.order_service import OrderService
 from workers.sqs_worker import SqsWorker
 
@@ -29,11 +27,20 @@ def _order_details() -> OrderDetails:
     )
 
 
+def _queued_message(order_ref: str = "ref-1") -> dict:
+    """The message diner-ui posts and API Gateway puts on order_queue unchanged."""
+    return {
+        "event_type": "ORDER_PLACED",
+        "order_ref": order_ref,
+        "data": _order_details().model_dump(),
+    }
+
+
 class TestOrderQueueIntake(unittest.TestCase):
     """
-    Diner orders placed through order_queue: the API enqueues and answers 202
-    with an order_ref, the SQS worker creates the order, and the diner looks
-    the order_id up by that ref.
+    Diner orders placed through order_queue: API Gateway puts the diner's
+    message on the queue, the SQS worker creates the order, and the diner
+    looks the order_id up by the order_ref it chose.
     """
 
     def setUp(self):
@@ -50,15 +57,7 @@ class TestOrderQueueIntake(unittest.TestCase):
             queue_url="https://sqs.ap-southeast-1.amazonaws.com/123456789012/order_queue",
             region_name="ap-southeast-1",
         )
-        self.sqs = MagicMock()
-        self.producer = OrderQueueProducer(self.sqs_config, sqs_client=self.sqs)
         self.worker = SqsWorker(self.sqs_config, self.service, sqs_client=MagicMock())
-
-    def _sent_body(self) -> dict:
-        self.sqs.send_message.assert_called_once()
-        kwargs = self.sqs.send_message.call_args.kwargs
-        self.assertEqual(kwargs["QueueUrl"], self.sqs_config.queue_url)
-        return json.loads(kwargs["MessageBody"])
 
     def _deliver(self, body: dict, message_id: str = "msg-1") -> None:
         asyncio.run(self.worker._handle_message({
@@ -67,27 +66,12 @@ class TestOrderQueueIntake(unittest.TestCase):
             "Body": json.dumps(body),
         }))
 
-    def test_producer_sends_order_placed_message_carrying_the_order_ref(self):
-        order_ref = asyncio.run(self.producer.enqueue_order(_order_details()))
-
-        body = self._sent_body()
-        self.assertEqual(body["event_type"], "ORDER_PLACED")
-        self.assertEqual(body["order_ref"], order_ref)
-        self.assertEqual(body["data"]["total_price"], 9.00)
-        self.assertEqual(body["data"]["orders"][0]["stall_id"], 1)
-
-    def test_producer_gives_each_order_a_distinct_ref(self):
-        first = asyncio.run(self.producer.enqueue_order(_order_details()))
-        second = asyncio.run(self.producer.enqueue_order(_order_details()))
-
-        self.assertNotEqual(first, second)
-
     def test_queued_order_is_pending_until_the_worker_creates_it(self):
-        order_ref = asyncio.run(self.producer.enqueue_order(_order_details()))
+        order_ref = "ref-1"
 
         self.assertIsNone(self.service.get_queued_order(order_ref))
 
-        self._deliver(self._sent_body())
+        self._deliver(_queued_message(order_ref))
 
         queued = self.service.get_queued_order(order_ref)
         self.assertIsNotNone(queued)
@@ -97,8 +81,7 @@ class TestOrderQueueIntake(unittest.TestCase):
 
     def test_redelivered_message_does_not_create_a_second_order(self):
         """SQS delivers at least once: the same message can arrive twice."""
-        asyncio.run(self.producer.enqueue_order(_order_details()))
-        body = self._sent_body()
+        body = _queued_message()
 
         self._deliver(body, message_id="msg-1")
         self._deliver(body, message_id="msg-1-redelivered")
@@ -109,28 +92,43 @@ class TestOrderQueueIntake(unittest.TestCase):
         deleted = [c.kwargs["ReceiptHandle"] for c in self.worker._sqs.delete_message.call_args_list]
         self.assertEqual(deleted, ["receipt-msg-1", "receipt-msg-1-redelivered"])
 
-    def test_queue_endpoint_answers_202_with_the_order_ref(self):
-        response = asyncio.run(queue_order(orders=_order_details(), producer=self.producer))
+    def test_two_orders_with_different_refs_are_both_created(self):
+        self._deliver(_queued_message("ref-1"), message_id="msg-1")
+        self._deliver(_queued_message("ref-2"), message_id="msg-2")
 
-        self.assertEqual(response.status_code, 202)
-        data = json.loads(response.body.decode())
-        self.assertEqual(data["status"], "QUEUED")
-        self.assertEqual(data["order_ref"], self._sent_body()["order_ref"])
+        self.assertEqual(len(self.service.get_orders_for_stall(1)), 2)
+        self.assertNotEqual(
+            self.service.get_queued_order("ref-1")["order_id"],
+            self.service.get_queued_order("ref-2")["order_id"],
+        )
 
-    def test_queue_endpoint_answers_503_when_the_queue_is_not_configured(self):
-        with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(queue_order(orders=_order_details(), producer=None))
+    def test_malformed_order_is_left_on_the_queue_for_the_dead_letter_rule(self):
+        """Nothing checks an order's shape before it is queued, so the worker must not delete a bad one."""
+        self._deliver({"event_type": "ORDER_PLACED", "order_ref": "bad", "data": {"orders": "not a list"}})
 
-        self.assertEqual(ctx.exception.status_code, 503)
+        self.worker._sqs.delete_message.assert_not_called()
+        self.assertIsNone(self.service.get_queued_order("bad"))
+        self.assertEqual(self.service.get_orders_for_stall(1), [])
+
+    def test_the_order_service_no_longer_queues_orders_itself(self):
+        """API Gateway owns POST /orders/queue; only the look-up is left here."""
+        from endpoints.order_routes import order_router
+
+        queue_routes = {
+            (tuple(sorted(route.methods)), route.path)
+            for route in order_router.routes
+            if "/orders/queue" in route.path
+        }
+        self.assertEqual(queue_routes, {(("GET",), "/v1/order/orders/queue/{order_ref}")})
 
     def test_lookup_endpoint_answers_202_pending_then_200_with_the_order_id(self):
-        order_ref = asyncio.run(self.producer.enqueue_order(_order_details()))
+        order_ref = "ref-1"
 
         pending = asyncio.run(get_queued_order(order_ref=order_ref, order_service=self.service))
         self.assertEqual(pending.status_code, 202)
         self.assertEqual(json.loads(pending.body.decode())["status"], "PENDING")
 
-        self._deliver(self._sent_body())
+        self._deliver(_queued_message(order_ref))
 
         created = asyncio.run(get_queued_order(order_ref=order_ref, order_service=self.service))
         self.assertEqual(created.status_code, 200)
