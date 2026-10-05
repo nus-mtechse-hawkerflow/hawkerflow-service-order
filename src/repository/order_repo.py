@@ -219,17 +219,21 @@ class OrderRepo:
         self,
         pending_before: datetime,
         ready_before: datetime | None = None,
-    ) -> dict[str, int]:
+    ) -> dict:
         """
         Cancels stall orders still PENDING on an order placed before
         `pending_before`, and completes those still READY on an order placed
         before `ready_before`. Both cut-offs are naive UTC, like f_created_at.
+
+        Returns the two counts and, under `stall_orders`, each stall order that
+        changed, in the shape update_stall_order_status returns.
         """
         rules = [("PENDING", "CANCELLED", pending_before)]
         if ready_before is not None:
             rules.append(("READY", "COMPLETED", ready_before))
 
         changed = {"CANCELLED": 0, "COMPLETED": 0}
+        changed_stall_orders: list[StallOrder] = []
         with Session(self._engine) as session:
             touched_order_ids: set[int] = set()
 
@@ -243,6 +247,7 @@ class OrderRepo:
                     stall_order.f_status = to_status
                     session.add(stall_order)
                     touched_order_ids.add(stall_order.f_order_id)
+                    changed_stall_orders.append(stall_order)
                     changed[to_status] += 1
 
             session.flush()
@@ -256,7 +261,22 @@ class OrderRepo:
 
             session.commit()
 
-        return {"cancelled": changed["CANCELLED"], "completed": changed["COMPLETED"]}
+            stall_orders = []
+            for stall_order in changed_stall_orders:
+                session.refresh(stall_order)
+                stall_orders.append({
+                    "stall_order_id": stall_order.f_id,
+                    "order_id": stall_order.f_order_id,
+                    "stall_id": stall_order.f_stall_id,
+                    "status": stall_order.f_status,
+                    "subtotal": stall_order.f_subtotal,
+                })
+
+        return {
+            "cancelled": changed["CANCELLED"],
+            "completed": changed["COMPLETED"],
+            "stall_orders": stall_orders,
+        }
 
     def _populate_order_details(self, order_items: list[OrderItem]):
         grouped = defaultdict(list)

@@ -7,8 +7,6 @@ __pycache__/
 venv/
 *.egg-info/
 
-# SAM build output
-.aws-sam/
 
 # OS
 .DS_Store

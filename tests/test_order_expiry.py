@@ -1,8 +1,9 @@
+import asyncio
 import os
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -22,11 +23,8 @@ REPO_ROOT = str(Path(__file__).resolve().parents[1])
 NOW = datetime(2026, 10, 4, 6, 0, 0)
 
 
-class TestOrderExpiry(unittest.TestCase):
-    """
-    A stall that never accepts an order must not leave the diner waiting
-    forever, and food that was made but never collected is still a sale.
-    """
+class ExpiryTestCase(unittest.TestCase):
+    """An in-memory database, an expiry worker, and helpers to age orders."""
 
     def setUp(self):
         self.engine = create_engine(
@@ -63,6 +61,13 @@ class TestOrderExpiry(unittest.TestCase):
             parent = session.get(Order, order_id).f_status
             stalls = session.exec(select(StallOrder).where(StallOrder.f_order_id == order_id)).all()
             return parent, {so.f_stall_id: so.f_status for so in stalls}
+
+
+class TestOrderExpiry(ExpiryTestCase):
+    """
+    A stall that never accepts an order must not leave the diner waiting
+    forever, and food that was made but never collected is still a sale.
+    """
 
     def test_pending_order_nobody_accepted_in_time_is_cancelled(self):
         order_id = self._order(timedelta(minutes=16), {1: "PENDING"})
@@ -128,6 +133,79 @@ class TestOrderExpiry(unittest.TestCase):
         worker.run_once(now=NOW)
 
         self.assertEqual(self._statuses(order_id)[1], {1: "READY"})
+
+
+class TestOrderExpiryEvents(ExpiryTestCase):
+    """
+    An order the expiry worker cancels or completes is announced like any other
+    status change, so its trail in the events queue does not stop short.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.publisher = AsyncMock()
+        self.worker = OrderExpiryWorker(
+            ExpiryConfig(enabled=True, pending_minutes=15), self.repo, event_publisher=self.publisher
+        )
+
+    def _published(self) -> list[dict]:
+        return [call.args[0] for call in self.publisher.publish_order_status_updated.await_args_list]
+
+    def test_cancelling_an_unaccepted_order_publishes_an_event(self):
+        order_id = self._order(timedelta(minutes=16), {1: "PENDING"})
+
+        result = asyncio.run(self.worker.run_and_publish(now=NOW))
+
+        self.assertEqual(result, {"cancelled": 1, "completed": 0})
+        (event,) = self._published()
+        self.assertEqual(
+            (event["order_id"], event["stall_id"], event["status"], event["reason"]),
+            (order_id, 1, "CANCELLED", "NOT_ACCEPTED_IN_TIME"),
+        )
+        self.assertEqual(event["subtotal"], 5.0)
+
+    def test_completing_an_uncollected_order_publishes_an_event(self):
+        order_id = self._order(timedelta(hours=16), {1: "READY"})
+
+        asyncio.run(self.worker.run_and_publish(now=NOW))
+
+        (event,) = self._published()
+        self.assertEqual(
+            (event["order_id"], event["status"], event["reason"]),
+            (order_id, "COMPLETED", "NOT_COLLECTED_BY_DAY_END"),
+        )
+
+    def test_only_the_stall_orders_that_changed_are_announced(self):
+        self._order(timedelta(minutes=20), {1: "PREPARING", 2: "PENDING"})
+        self._order(timedelta(minutes=5), {3: "PENDING"})
+
+        asyncio.run(self.worker.run_and_publish(now=NOW))
+
+        self.assertEqual([e["stall_id"] for e in self._published()], [2])
+
+    def test_nothing_is_published_when_nothing_expired(self):
+        self._order(timedelta(minutes=5), {1: "PENDING"})
+
+        asyncio.run(self.worker.run_and_publish(now=NOW))
+
+        self.publisher.publish_order_status_updated.assert_not_awaited()
+
+    def test_a_failed_publish_does_not_stop_the_other_events(self):
+        self._order(timedelta(minutes=20), {1: "PENDING", 2: "PENDING"})
+        self.publisher.publish_order_status_updated.side_effect = [RuntimeError("topic unreachable"), None]
+
+        result = asyncio.run(self.worker.run_and_publish(now=NOW))
+
+        self.assertEqual(result, {"cancelled": 2, "completed": 0})
+        self.assertEqual(self.publisher.publish_order_status_updated.await_count, 2)
+
+    def test_expiry_still_works_without_a_publisher(self):
+        worker = OrderExpiryWorker(ExpiryConfig(enabled=True, pending_minutes=15), self.repo)
+        order_id = self._order(timedelta(minutes=16), {1: "PENDING"})
+
+        asyncio.run(worker.run_and_publish(now=NOW))
+
+        self.assertEqual(self._statuses(order_id)[1], {1: "CANCELLED"})
 
 
 class TestExpiryConfiguration(unittest.TestCase):

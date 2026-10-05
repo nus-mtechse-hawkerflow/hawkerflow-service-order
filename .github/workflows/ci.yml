@@ -72,16 +72,3 @@ jobs:
             | tar -xz gitleaks
           sudo install gitleaks /usr/local/bin/gitleaks
       - run: gitleaks detect --source . -v --redact
-
-  sam-validate:
-    name: sam-validate
-    runs-on: ubuntu-latest
-    env:
-      SAM_CLI_TELEMETRY: "0"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: aws-actions/setup-sam@v2
-      - run: sam validate -t infra/template.yaml --lint

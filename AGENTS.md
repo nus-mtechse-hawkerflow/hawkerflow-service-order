@@ -33,16 +33,12 @@ Welcome to **`hawkerflow-service-order`**, the order management microservice of 
 
 ```text
 hawkerflow-service-order/
-├── Makefile                      # Make targets (lint, test, build, deploy)
+├── Makefile                      # Make targets (install, lint, test, audit)
 ├── README.md                     # Platform overview & deployment notes
 ├── AGENT.md                      # Engineering & AI Agent technical reference (this file)
 ├── pyproject.toml                # Project metadata & build tool configuration
 ├── requirements.txt              # Production runtime dependencies
 ├── requirements-dev.txt          # Development, linting & test dependencies
-├── infra/
-│   ├── template.yaml             # AWS SAM Infrastructure as Code (SQS, DLQs, DynamoDB, API Gateway)
-│   ├── samconfig.toml            # SAM deployment configurations
-│   └── SECURITY_BASELINE.md      # IaC security audit justifications
 ├── resources/
 │   └── config.yml                # Main application YAML configuration
 ├── vault/                        # File-based secrets directory

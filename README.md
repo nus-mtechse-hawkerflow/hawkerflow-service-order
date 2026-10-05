@@ -8,9 +8,6 @@ FastAPI + SQLModel on PostgreSQL, with Amazon SQS and SNS for messaging (LocalSt
 locally). The other HawkerFlow services (hawker, customer, analytics) and the two web apps
 (`hawker-ui`, `diner-ui`) live in their own repositories.
 
-> The previous README described the original single-repository serverless design (Lambda +
-> DynamoDB). It is kept, unchanged, in [docs/ORIGINAL_PLATFORM_DESIGN.md](docs/ORIGINAL_PLATFORM_DESIGN.md).
-
 ## How orders flow
 
 ```
@@ -39,6 +36,8 @@ stall sub-order:
 |---|---|
 | `OrderPlaced` | an order is created (either intake path) |
 | `OrderPreparing`, `OrderReady`, `OrderCompleted`, `OrderCancelled` | a stall changes its sub-order's status |
+| `OrderCancelled` with `"reason": "NOT_ACCEPTED_IN_TIME"` | the expiry worker cancels a sub-order no stall accepted in time |
+| `OrderCompleted` with `"reason": "NOT_COLLECTED_BY_DAY_END"` | the expiry worker completes a ready sub-order left from an earlier day |
 
 ```json
 {
@@ -153,7 +152,5 @@ Fine for local development; to fix before any public deployment:
 - **Authentication.** Stall endpoints accept an `X-Stall-ID` header from any caller, and the
   bearer token's claims are read without verifying its signature.
 - **CORS** allows every origin (`allow_origins: '*'`).
-- **Infrastructure.** `infra/template.yaml` still describes the original Lambda + DynamoDB design;
-  nothing yet defines this service, its database or its queues for AWS.
 - `POST /v1/order/sqs/simulate` calls an async handler without `await`, so it returns before
   processing the message.

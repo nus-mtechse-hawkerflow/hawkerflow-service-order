@@ -33,12 +33,16 @@ def create_queue_components(
     return OrderQueueProducer(sqs), SqsWorker(sqs, order_service)
 
 
-def create_expiry_worker(expiry: ExpiryConfig | None, repo: OrderRepo) -> OrderExpiryWorker | None:
+def create_expiry_worker(
+    expiry: ExpiryConfig | None,
+    repo: OrderRepo,
+    event_publisher: EventPublisher | None = None,
+) -> OrderExpiryWorker | None:
     """Builds the order expiry worker, or None when expiry is switched off."""
     if not (expiry and expiry.enabled):
         return None
 
-    return OrderExpiryWorker(expiry, repo)
+    return OrderExpiryWorker(expiry, repo, event_publisher)
 
 
 @asynccontextmanager
@@ -84,7 +88,7 @@ async def startup(app: FastAPI):
         )
 
     # Start the order expiry worker if a deployment has switched it on
-    expiry_worker = create_expiry_worker(config.expiry, order_repo)
+    expiry_worker = create_expiry_worker(config.expiry, order_repo, event_publisher)
     expiry_task = asyncio.create_task(expiry_worker.start()) if expiry_worker else None
 
     yield
