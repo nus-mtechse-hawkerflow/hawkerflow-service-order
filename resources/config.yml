@@ -1,0 +1,52 @@
+service:
+  title: HawkerFlow Service Order
+  root_path: '/order'
+  port: 8080
+  host: '0.0.0.0'
+  allow_origins:
+    - '*'
+  methods:
+    - '*'
+  headers:
+    - '*'
+  docs_url: '/docs'
+  redoc_url: '/redoc'
+  reload: true
+  scheme: 'http'
+  credentials: true
+
+datasource:
+  driver:
+    package: "drivers.postgres_driver"
+    driver_class: "PostgresDriver"
+  database:
+    connection_url: 'sqlite:///database.db'
+    driver_name: 'postgresql+psycopg2'
+  options:
+    echo: false
+
+# Off unless a deployment turns it on: without a reachable queue the diner
+# falls back to POST /orders. Set SQS__ENABLED=true and SQS__QUEUE_URL in the
+# environment (AWS does this in Terraform), or enabled: true here for LocalStack.
+sqs:
+  enabled: false
+  queue_url: "http://localhost:4566/000000000000/order_queue"
+  region_name: "ap-southeast-1"
+  wait_time_seconds: 5
+  max_number_of_messages: 10
+  visibility_timeout: 60
+
+# Cancels orders no stall accepted in time and completes uncollected ready
+# orders after the Singapore day ends. Off unless EXPIRY__ENABLED=true.
+expiry:
+  enabled: false
+  pending_minutes: 15
+  interval_seconds: 60
+  complete_ready_at_day_end: true
+
+# Publishes an event for every step of an order. Off unless a deployment
+# sets EVENTS__ENABLED=true and EVENTS__TOPIC_ARN (AWS does this in Terraform).
+events:
+  enabled: false
+  topic_arn: "arn:aws:sns:us-east-1:000000000000:order_status"
+  region_name: "ap-southeast-1"
