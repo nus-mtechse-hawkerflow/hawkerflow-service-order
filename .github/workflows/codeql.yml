@@ -1,0 +1,36 @@
+# CodeQL SAST for the Python services. Free for public repositories.
+# Findings appear under GitHub > Security > Code scanning, next to the
+# Bandit, Semgrep, gitleaks and Trivy results uploaded by ci-cd.yml.
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main, release]
+  push:
+    branches: [main, release]
+  schedule:
+    - cron: "17 18 * * 0"   # weekly, Monday 02:17 SGT, catches newly published queries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql-python

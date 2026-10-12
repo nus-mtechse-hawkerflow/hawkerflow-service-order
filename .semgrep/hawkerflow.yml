@@ -1,0 +1,149 @@
+# HawkerFlow-specific Semgrep rules.
+#
+# Generic SAST (Bandit, Semgrep registry packs, CodeQL) reports nothing on these
+# services, yet a manual review found broken authentication and authorization.
+# These rules encode those findings so they cannot come back once fixed.
+# Run locally:  semgrep scan src --config .semgrep/ --metrics=off
+
+rules:
+  - id: hawkerflow-unverified-jwt-decode
+    severity: ERROR
+    message: >-
+      JWT claims are read by base64-decoding the payload in '$FUNC' without
+      verifying the signature. Anyone can forge a token with any claims
+      (e.g. custom:stall_id). Verify against the Cognito JWKS (e.g. PyJWT
+      PyJWKClient with audience/issuer checks) or rely on the API Gateway JWT
+      authorizer and read the verified claims it forwards.
+    languages: [python]
+    metadata:
+      cwe: "CWE-347: Improper Verification of Cryptographic Signature"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      confidence: HIGH
+    patterns:
+      - pattern-inside: |
+          def $FUNC(...):
+            ...
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: (?i).*(jwt|token|claim).*
+      - pattern-either:
+          - pattern: base64.urlsafe_b64decode(...)
+          - pattern: base64.b64decode(...)
+
+  - id: hawkerflow-identity-from-client-header
+    severity: ERROR
+    message: >-
+      The caller's stall identity is taken from the client-controlled
+      X-Stall-ID header. Any client can set it to any stall and read or change
+      that stall's data (cross-tenant access). Derive the stall from verified
+      token claims; allow the header only in a local/test profile.
+    languages: [python]
+    metadata:
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp: "A01:2021 - Broken Access Control"
+      confidence: HIGH
+    pattern-either:
+      - pattern: Header(..., alias="X-Stall-ID", ...)
+      - pattern: Header(alias="X-Stall-ID", ...)
+
+  - id: hawkerflow-mutating-route-without-auth
+    severity: ERROR
+    message: >-
+      '$METHOD' route '$F' changes state but has no authentication dependency.
+      Any anonymous caller can invoke it (e.g. change any order's status by
+      guessing its integer ID). Add an auth dependency that checks the caller
+      owns the resource.
+    languages: [python]
+    metadata:
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+      owasp: "A01:2021 - Broken Access Control"
+      confidence: MEDIUM
+    patterns:
+      - pattern: |
+          @$ROUTER.$METHOD(...)
+          async def $F(...):
+            ...
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(put|patch|delete)$
+      # Recognised auth dependencies. Add the name of any new one here.
+      - pattern-not: |
+          @$ROUTER.$METHOD(...)
+          async def $F(..., $P: Annotated[$T, Depends(get_current_stall_id)], ...):
+            ...
+      - pattern-not: |
+          @$ROUTER.$METHOD(...)
+          async def $F(..., $P: Annotated[$T, Depends(get_current_user)], ...):
+            ...
+      - pattern-not: |
+          @$ROUTER.$METHOD(...)
+          async def $F(..., $P: Annotated[$T, Depends(require_matching_stall)], ...):
+            ...
+      - pattern-not: |
+          @$ROUTER.$METHOD(...)
+          async def $F(..., $P: $T = Depends(require_matching_stall), ...):
+            ...
+      - pattern-not: |
+          @$ROUTER.$METHOD(...)
+          async def $F(..., $P: Annotated[$T, Depends(verify_jwt)], ...):
+            ...
+
+  - id: hawkerflow-debug-route-exposed
+    severity: WARNING
+    message: >-
+      Diagnostic/simulation route '$PATH' is mounted in the production app.
+      It is reachable through API Gateway and needs no credentials. Mount it
+      only when a local/test flag is set.
+    languages: [python]
+    metadata:
+      cwe: "CWE-489: Active Debug Code"
+      owasp: "A05:2021 - Security Misconfiguration"
+      confidence: HIGH
+    patterns:
+      - pattern: |
+          @$ROUTER.$METHOD($PATH, ...)
+          async def $F(...):
+            ...
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: (?i).*(simulate|debug|/status).*
+
+  - id: hawkerflow-client-supplied-price-persisted
+    severity: ERROR
+    message: >-
+      A price or total from the request model is stored as-is. A diner can
+      submit any price (e.g. 0.01). Re-price every line from the stall menu on
+      the server and compute totals there (AD-03), in integer cents.
+    languages: [python]
+    metadata:
+      cwe: "CWE-602: Client-Side Enforcement of Server-Side Security"
+      owasp: "A04:2021 - Insecure Design"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: $CALL(..., f_price=$ITEM.price, ...)
+      - pattern: $CALL(..., f_total_price=$ORDER.total_price, ...)
+      - pattern: sum($D.price * $D.quantity for $D in $DISHES)
+
+  - id: hawkerflow-cors-wildcard-with-credentials
+    severity: WARNING
+    message: >-
+      CORS allows every origin and credentials. Starlette then echoes the
+      caller's Origin back, so any website can make credentialed requests to
+      this API. List the CloudFront app origins explicitly.
+    languages: [yaml]
+    metadata:
+      cwe: "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      owasp: "A05:2021 - Security Misconfiguration"
+      confidence: MEDIUM
+    patterns:
+      - pattern-inside: |
+          service:
+            ...
+      - pattern: |
+          allow_origins:
+            - '*'
+      - pattern-inside: |
+          service:
+            ...
+            credentials: true
+            ...
