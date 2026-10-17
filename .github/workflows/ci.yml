@@ -332,7 +332,10 @@ jobs:
           exit 1
 
   # ------------------------------------------------------------------
-  # 7. DAST: OWASP ZAP API scan against the service just deployed.
+  # 7. DAST: OWASP ZAP active scan of the deployed service's GET endpoints.
+  #    No endpoint requires auth yet (AISS-06), so fuzzing POST/PUT/PATCH on
+  #    the live stack would write junk records; write endpoints belong in a
+  #    full active scan on a non-production environment.
   #    Report-only until AISS-06 (auth) is fixed; then set ZAP_FAIL=true.
   # ------------------------------------------------------------------
   dast:
@@ -345,12 +348,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: ZAP API scan from the service's OpenAPI spec
+      - name: ZAP active scan of the service's GET endpoints
+        env:
+          TARGET: ${{ vars.API_BASE_URL }}${{ vars.SERVICE_PATH }}
         run: |
-          mkdir -p zap && cp .zap/rules.tsv zap/rules.tsv && chmod -R 777 zap
+          mkdir -p zap && cp .zap/rules.tsv zap/rules.tsv
+          curl -fsS "$TARGET/openapi.json" \
+            | jq '.paths |= (with_entries(.value |= with_entries(select(.key == "get" or .key == "parameters"))) | with_entries(select(.value | has("get"))))' \
+            > zap/openapi-get.json
+          echo "Endpoints in scope:"; jq -r '.paths | keys[]' zap/openapi-get.json
+          chmod -R 777 zap
           docker run --rm -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" zap-api-scan.py \
-            -t "${{ vars.API_BASE_URL }}${{ vars.SERVICE_PATH }}/openapi.json" \
-            -f openapi -O "${{ vars.API_BASE_URL }}${{ vars.SERVICE_PATH }}" \
+            -t openapi-get.json -f openapi -O "$TARGET" \
             -c rules.tsv \
             -r zap-report.html -J zap-report.json -w zap-report.md \
             || code=$?
