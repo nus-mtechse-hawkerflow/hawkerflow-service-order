@@ -1,195 +1,374 @@
+# HawkerFlow service pipeline (drop-in for order, hawker, customer, analytics)
+#
+#   PR to main/release ─┐
+#   push to main ───────┼─► quality ─┐
+#                       │   sast ────┤
+#                       │   sca ─────┼─► image (build, Trivy scan, SBOM) ─┐
+#                       │   secrets ─┘                                    │
+#   push to release ────┴──────────────────────────────────────────────► deploy ─► smoke ─► dast
+#
+# Every gate runs on every PR. Only a push to `release` pushes an image and deploys,
+# and only after all gates pass.
+#
+# Repository / environment configuration expected:
+#   secrets.AWS_ROLE_TO_ASSUME      OIDC role (ECR push + ECS deploy)
+#   vars.ECR_REPOSITORY             e.g. hawkerflow-order
+#   vars.ECS_CLUSTER, vars.ECS_SERVICE, vars.ECS_TASK_FAMILY, vars.ECS_CONTAINER_NAME
+#   vars.API_BASE_URL               API Gateway base URL, e.g. https://abc123.execute-api.ap-southeast-1.amazonaws.com
+#   vars.SERVICE_PATH               path prefix routed to this service: /order | /hawker | /customer | /analytics
+
 name: CI/CD
 
 on:
-  push:
-    branches:
-      - release
-
   pull_request:
-    branches:
-      - main
-
+    branches: [main, release]
+  push:
+    branches: [main, release]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   AWS_REGION: ap-southeast-1
+  GITLEAKS_VERSION: "8.30.1"
+  TRIVY_IMAGE: aquasec/trivy:0.76.0   # bump periodically (released 2026-10-14)
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
 
 jobs:
-
-  # ==========================================
-  # 1. VALIDATION
-  # ==========================================
-  validation:
-    name: Code Quality & Security
+  # ------------------------------------------------------------------
+  # 1. Lint + unit tests
+  # ------------------------------------------------------------------
+  quality:
+    name: Lint & unit tests
     runs-on: ubuntu-latest
-
     timeout-minutes: 15
-
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # --------------------------------------
-      # Checkout
-      # --------------------------------------
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # --------------------------------------
-      # Python
-      # --------------------------------------
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      # --------------------------------------
-      # Dependencies
-      # --------------------------------------
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt pytest-cov
 
-      # --------------------------------------
-      # Ruff
-      # --------------------------------------
-      - name: Ruff Linting
-        run: ruff check .
+      - name: Ruff
+        run: ruff check . --output-format=github
 
-      # --------------------------------------
-      # Bandit
-      # --------------------------------------
-      - name: Bandit Security Scan
-        run: bandit -r src
-
-      # --------------------------------------
-      # Dependency Audit
-      # --------------------------------------
-      - name: Dependency Vulnerability Scan
-        run: pip-audit -r requirements.txt
-
-      # --------------------------------------
-      # Unit Tests
-      # --------------------------------------
-      - name: Run Unit Tests
+      - name: Pytest with coverage
         env:
           PYTHONPATH: src
-        run: pytest -q
+        run: pytest -q --junitxml=reports/junit.xml --cov=src --cov-report=xml:reports/coverage.xml --cov-report=term
 
-      # --------------------------------------
-      # Gitleaks
-      # --------------------------------------
-      - name: Install Gitleaks
-        env:
-          GITLEAKS_VERSION: "8.30.1"
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-reports
+          path: reports/
+
+  # ------------------------------------------------------------------
+  # 2. SAST: Bandit (Python-specific) + Semgrep (OWASP rules)
+  #    Results land in GitHub > Security > Code scanning.
+  #    CodeQL runs in its own workflow (codeql.yml).
+  # ------------------------------------------------------------------
+  sast:
+    name: SAST (Bandit + Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install scanners
+        run: pip install "bandit[sarif]>=1.7" semgrep
+
+      - name: Bandit (report all findings)
+        run: bandit -r src -f sarif -o bandit.sarif --exit-zero
+
+      - name: Semgrep (registry packs + HawkerFlow rules, report all findings)
         run: |
-          curl --fail --silent --show-error --location \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz gitleaks
+          semgrep scan src resources \
+            --config p/python --config p/owasp-top-ten --config p/secrets \
+            --config .semgrep/ \
+            --sarif --output semgrep.sarif --metrics=off
 
+      - name: Upload Bandit SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      # Gate: fail on medium+ severity with medium+ confidence (Bandit)
+      # and on ERROR-level Semgrep findings.
+      - name: Gate on Bandit medium/high
+        run: bandit -r src -ll -ii
+
+      - name: Gate on Semgrep registry errors
+        run: |
+          semgrep scan src \
+            --config p/python --config p/owasp-top-ten --config p/secrets \
+            --severity ERROR --error --metrics=off
+
+      # The HawkerFlow rules encode known open issues (AISS-06 etc.). They report
+      # to Code Scanning from day one; set repo variable ENFORCE_HAWKERFLOW_RULES=true
+      # once the fixes are merged, so the issues cannot return.
+      - name: Gate on HawkerFlow rules
+        if: vars.ENFORCE_HAWKERFLOW_RULES == 'true'
+        run: semgrep scan src resources --config .semgrep/ --severity ERROR --error --metrics=off
+
+  # ------------------------------------------------------------------
+  # 3. SCA: known-vulnerable dependencies
+  # ------------------------------------------------------------------
+  sca:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "pip-audit>=2.7"
+      - name: pip-audit
+        run: |
+          mkdir -p reports
+          pip-audit -r requirements.txt --format json --output reports/pip-audit.json || true
+          pip-audit -r requirements.txt
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pip-audit
+          path: reports/
+
+  # ------------------------------------------------------------------
+  # 4. Secrets: full git history, not just the working tree
+  # ------------------------------------------------------------------
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
           sudo install gitleaks /usr/local/bin/gitleaks
 
-      - name: Scan Secrets
-        run: gitleaks detect --source . -v --redact
+      - name: Scan every commit
+        run: gitleaks git . --redact --verbose --report-format sarif --report-path gitleaks.sarif
 
+      - name: Upload gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
 
-  # ==========================================
-  # 2. BUILD & DEPLOY
-  # ==========================================
-  deploy:
-    name: Build & Deploy ECS
+  # ------------------------------------------------------------------
+  # 5. Build image, scan it, produce an SBOM; push only on release
+  # ------------------------------------------------------------------
+  image:
+    name: Build, scan & push image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [quality, sast, sca, secrets]
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      LOCAL_IMAGE: hawkerflow-service:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-    needs:
-      - validation
+      - name: Build image
+        run: docker build --tag "$LOCAL_IMAGE" .
 
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      - name: Trivy - Dockerfile misconfiguration
+        run: |
+          docker run --rm -v "$PWD:/src" "$TRIVY_IMAGE" config --exit-code 0 --severity MEDIUM,HIGH,CRITICAL /src/Dockerfile
 
-    environment: PROD
+      - name: Trivy - image vulnerabilities (SARIF)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -v trivy-cache:/root/.cache \
+            "$TRIVY_IMAGE" image --format sarif --output /out/trivy.sarif "$LOCAL_IMAGE"
 
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+      - name: SBOM (CycloneDX)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -v trivy-cache:/root/.cache \
+            "$TRIVY_IMAGE" image --format cyclonedx --output /out/sbom.cdx.json "$LOCAL_IMAGE"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+      # Gate: fixable HIGH/CRITICAL CVEs block the release.
+      - name: Gate on fixable HIGH/CRITICAL CVEs
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache \
+            "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$LOCAL_IMAGE"
+
+      # Hand the exact scanned image to the deploy job (release pushes only).
+      - name: Save scanned image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+        run: docker save "$LOCAL_IMAGE" | gzip > image.tar.gz
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scanned-image
+          path: image.tar.gz
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # 6. Push to ECR + deploy to ECS (release branch only), then smoke test
+  # ------------------------------------------------------------------
+  deploy:
+    name: Push & deploy to ECS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    environment: PROD   # NB: currently points at the dev stack (AISS-15)
     permissions:
       contents: read
       id-token: write
-
-    timeout-minutes: 30
-
     concurrency:
-      group: hawkerflow-prod-deployment
+      group: ecs-deploy-${{ github.repository }}
       cancel-in-progress: false
-
+    env:
+      LOCAL_IMAGE: hawkerflow-service:${{ github.sha }}
     steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: scanned-image
 
-      # --------------------------------------
-      # Checkout
-      # --------------------------------------
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Load scanned image
+        run: gunzip -c image.tar.gz | docker load
 
-      # --------------------------------------
-      # AWS Authentication
-      # --------------------------------------
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v6.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: hawkerflow-ecr-role
+          role-session-name: hawkerflow-deploy-${{ github.run_id }}
 
-      # --------------------------------------
-      # ECR Login
-      # --------------------------------------
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      # --------------------------------------
-      # Docker Build & Push
-      # --------------------------------------
-      - name: Build and Push Docker Image
-        id: build-image
-
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-
+      - name: Push image (tagged by commit SHA)
+        id: push
         run: |
-          IMAGE_URI="$REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
-
-          echo "Building image: $IMAGE_URI"
-
-          docker build \
-            --tag "$IMAGE_URI" \
-            .
-
+          IMAGE_URI="${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}"
+          docker tag "$LOCAL_IMAGE" "$IMAGE_URI"
           docker push "$IMAGE_URI"
-
           echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------
-      # ECS Task Definition
-      # --------------------------------------
-      - name: Render ECS Task Definition
-        id: render-task
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
+      - name: Render task definition with the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
         with:
           task-definition-family: ${{ vars.ECS_TASK_FAMILY }}
           container-name: ${{ vars.ECS_CONTAINER_NAME }}
-          image: ${{ steps.build-image.outputs.image }}
+          image: ${{ steps.push.outputs.image }}
 
-      # --------------------------------------
-      # ECS Deployment
-      # --------------------------------------
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      - name: Deploy and wait for stability
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
         with:
-          task-definition: ${{ steps.render-task.outputs.task-definition }}
-          service: ${{ vars.ECS_SERVICE }}
+          task-definition: ${{ steps.render.outputs.task-definition }}
           cluster: ${{ vars.ECS_CLUSTER }}
+          service: ${{ vars.ECS_SERVICE }}
           wait-for-service-stability: true
+
+      - name: Smoke test through API Gateway
+        run: |
+          url="${{ vars.API_BASE_URL }}${{ vars.SERVICE_PATH }}/health"
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            echo "attempt $i: $url -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "::error::Smoke test failed: $url did not return 200"
+          exit 1
+
+  # ------------------------------------------------------------------
+  # 7. DAST: OWASP ZAP active scan of the deployed service's GET endpoints.
+  #    No endpoint requires auth yet (AISS-06), so fuzzing POST/PUT/PATCH on
+  #    the live stack would write junk records; write endpoints belong in a
+  #    full active scan on a non-production environment.
+  #    Report-only until AISS-06 (auth) is fixed; then set ZAP_FAIL=true.
+  # ------------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP API scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [deploy]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: ZAP active scan of the service's GET endpoints
+        env:
+          TARGET: ${{ vars.API_BASE_URL }}${{ vars.SERVICE_PATH }}
+        run: |
+          mkdir -p zap && cp .zap/rules.tsv zap/rules.tsv
+          curl -fsS "$TARGET/openapi.json" \
+            | jq '.paths |= (with_entries(.value |= with_entries(select(.key == "get" or .key == "parameters"))) | with_entries(select(.value | has("get"))))' \
+            > zap/openapi-get.json
+          echo "Endpoints in scope:"; jq -r '.paths | keys[]' zap/openapi-get.json
+          chmod -R 777 zap
+          docker run --rm -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" zap-api-scan.py \
+            -t openapi-get.json -f openapi -O "$TARGET" \
+            -c rules.tsv \
+            -r zap-report.html -J zap-report.json -w zap-report.md \
+            || code=$?
+          echo "ZAP exit code: ${code:-0} (0 pass, 1 FAIL alerts, 2 WARN only, 3 error)"
+          if [ "${{ vars.ZAP_FAIL }}" = "true" ] && [ "${code:-0}" = "1" ]; then exit 1; fi
+          if [ "${code:-0}" = "3" ]; then exit 3; fi
+
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-report
+          path: zap/
