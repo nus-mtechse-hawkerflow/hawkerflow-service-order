@@ -285,7 +285,7 @@ jobs:
       - name: Load scanned image
         run: gunzip -c image.tar.gz | docker load
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
